@@ -1,7 +1,11 @@
 @echo off
 chcp 65001 >nul
 echo ==========================================
+<<<<<<< HEAD
 echo   Code Manager v9.4 - Nuitka??
+=======
+echo   Code Manager v8.0 - Nuitka??
+>>>>>>> 9f1342512d62e0ee06fa527768887d64140cb558
 echo   Author: LZF
 echo ==========================================
 echo.
@@ -14,7 +18,11 @@ echo [2/4] ????...
 .venv\Scripts\pip.exe install requests nuitka ordered-set --quiet
 echo.
 
+<<<<<<< HEAD
 echo [3/4] Nuitka???...
+=======
+echo [3/4] Nuitka?????5-10?????????...
+>>>>>>> 9f1342512d62e0ee06fa527768887d64140cb558
 .venv\Scripts\python.exe -m nuitka ^
     --standalone ^
     --onefile ^
@@ -22,6 +30,7 @@ echo [3/4] Nuitka???...
     --windows-icon-from-ico=icon.ico ^
     --include-data-file=icon.png=icon.png ^
     --include-data-file=weixin.png=weixin.png ^
+<<<<<<< HEAD
     --output-filename=CodeManager_v9_4.exe ^
     --company-name="LZF" ^
     --product-name="Code Manager" ^
@@ -35,4 +44,22 @@ echo.
 
 echo [4/4] ?????
 echo   EXE???dist\CodeManager_v9_4.exe
+=======
+    --output-filename=CodeManager_v8_0.exe ^
+    --company-name="LZF" ^
+    --product-name="Code Manager" ^
+    --file-version=8.0.0 ^
+    --product-version=8.0.0 ^
+    --enable-plugin=tk-inter ^
+    --nofollow-import-to=test_release ^
+    github_manager_v8.py
+echo.
+
+echo [4/4] ?????
+echo   EXE???dist\CodeManager_v8_0.exe
+if exist dist\CodeManager_v8_0.exe (
+    for %%A in (dist\CodeManager_v8_0.exe) do echo   ?????%%~zA ??
+)
+echo.
+>>>>>>> 9f1342512d62e0ee06fa527768887d64140cb558
 pause
