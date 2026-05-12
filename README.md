@@ -1,16 +1,24 @@
-# Code Manager v9.6
+﻿# Code Manager v10.2
 
 本地代码托管管理工具 - 支持 GitHub / Gitee 平台
 
-## v9.6 更新内容
+## v10.2 更新内容
 
-### Bug修复
-- ✅ 修复新建配置时 `simpledialog` 未导入导致的崩溃
-- ✅ 统一所有字体为 Segoe UI，UI风格一致
+### UI调整
+- ✅ 操作日志面板移回右侧竖向显示
 
-### 跨平台支持
-- ✅ 新增 GitHub Actions 自动构建 macOS 版本
-- ✅ 新增 macOS 本地构建脚本 `build_macos.sh`
+### v10.1 Bug修复
+- ✅ 修复侧边栏Logo图标被截断问题
+- ✅ 修复深色模式不完整，切换深色/浅色时全局UI完全重建
+- ✅ 修复浅色模式下部分文字残留深色模式白色的问题
+
+### v10.0 全新UI设计
+- ✅ 全新Modern扁平化UI设计（Vercel/Notion风格）
+- ✅ 侧边栏导航替代顶部标签页（Emoji图标 + 选中指示器 + hover效果）
+- ✅ 卡片式容器布局（圆角边框 + 阴影效果）
+- ✅ 渐变色按钮组件（Canvas绘制 + hover变亮）
+- ✅ 自定义美化提示框（ToolTip组件）
+- ✅ 新增Modern主题配色（蓝紫渐变，支持深色/浅色）
 
 ## 功能
 
@@ -37,7 +45,7 @@
 
 ### Windows（使用EXE）
 ```
-dist/CodeManager_v9_6.exe
+dist/CodeManager_v10_2.exe
 ```
 
 ### macOS（使用GitHub Actions构建）
@@ -50,7 +58,7 @@ dist/CodeManager_v9_6.exe
 
 ### macOS（本地构建）
 ```bash
-cd v9.6
+cd v10.2
 chmod +x build_macos.sh
 ./build_macos.sh
 ```
@@ -58,14 +66,14 @@ chmod +x build_macos.sh
 ### 直接运行
 ```bash
 pip install requests
-python github_manager_v9.6.py
+python github_manager_v10.2.py
 ```
 
 ## 构建说明
 
 ### Windows 构建
 ```bash
-cd v9.6
+cd v10.2
 build_nuitka.bat
 ```
 
@@ -79,15 +87,15 @@ build_nuitka.bat
 
 ```bash
 # 创建标签并推送触发构建
-git tag v9.6.0
-git push origin v9.6.0
+git tag v10.2.0
+git push origin v10.2.0
 ```
 
 ### macOS 构建（本地）
 
 需要在 macOS 系统上运行：
 ```bash
-cd v9.6
+cd v10.2
 chmod +x build_macos.sh
 ./build_macos.sh
 ```
@@ -95,22 +103,23 @@ chmod +x build_macos.sh
 ## 项目结构
 
 ```
-v9.6/
+v10.2/
 ├── .github/
 │   └── workflows/
 │       └── build-macos.yml    # GitHub Actions 工作流
-├── github_manager_v9.6.py     # 主程序 (v9.6.0)
+├── github_manager_v10.2.py    # 主程序 (v10.2.0)
 ├── build_nuitka.bat           # Windows构建脚本
 ├── build_macos.sh             # macOS构建脚本
 ├── README.md                  # 项目说明
-├── 更新日志.txt                # 版本记录
+├── 更新日志.txt               # 版本记录
+├── LICENSE                    # 开源协议
 └── dist/
-    └── CodeManager_v9_6.exe   # Windows版（38.85MB）
+    └── CodeManager_v10_2.exe  # Windows版（39.3MB）
 ```
 
 ## 开发信息
 
 - **作者**: LZF
-- **版本**: 9.6.0
+- **版本**: 10.2.0
 - **Python**: 3.12 (Nuitka编译)
 - **支持平台**: Windows, macOS, Linux

@@ -2857,22 +2857,21 @@ class App:
 
         ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=5, column=0, columnspan=2, sticky=tk.EW, pady=10)
 
-        ttk.Label(f, text="v9.0 新增功能",
+        ttk.Label(f, text="v10.2 新增功能",
                   font=("Segoe UI", 11, "bold"),
                   foreground=t["accent"]).grid(row=6, column=0, columnspan=2, pady=(4, 6))
 
         features = [
+            "• 全新Modern扁平化UI设计（Vercel/Notion风格）",
+            "• 侧边栏导航（Emoji图标 + 选中指示器 + hover效果）",
+            "• 卡片式容器布局 + 渐变色按钮 + 美化提示框",
+            "• 深色/浅色主题切换（Modern/微信/VSCode/Cursor）",
+            "• 操作日志面板右侧竖向显示",
             "• 网络请求优化（自动重试、API限流处理、代理支持）",
-            "• 日志持久化与操作历史记录",
-            "• Issue管理（创建、关闭）",
-            "• PR管理（创建、合并、关闭）",
-            "• Webhook配置",
-            "• 仓库搜索功能",
-            "• 统计面板",
-            "• 设置页面（多配置文件、导入导出）",
+            "• Issue管理、PR管理、Webhook配置",
+            "• 仓库搜索、统计面板、设置页面",
             "• 批量操作（批量上传、批量Fork）",
-            "• .gitignore模板选择",
-            "• Nuitka加壳保护"
+            "• .gitignore模板选择 + Nuitka加壳保护"
         ]
         for i, feat in enumerate(features):
             ttk.Label(f, text=feat, font=("Segoe UI", 9),
