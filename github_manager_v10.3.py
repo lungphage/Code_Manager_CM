@@ -2138,16 +2138,19 @@ class App:
             messagebox.showwarning("提示", "请输入Issue标题")
             return
         
+        # 在主线程读取控件值，再传入后台线程
+        body = self.is_body.get("1.0", tk.END).strip()
+        labels = [l.strip() for l in self.is_labels.get().split(",") if l.strip()]
+
         self._show_loading("正在创建Issue...")
         def task():
             try:
                 owner, repo = rp.split("/", 1)
-                body = self.is_body.get("1.0", tk.END).strip()
-                labels = [l.strip() for l in self.is_labels.get().split(",") if l.strip()]
                 resp = self.api.create_issue(owner, repo, title, body, labels if labels else None)
                 if resp.status_code == 201:
-                    self.log(f"Issue创建成功：{resp.json().get('html_url', '')}")
-                    self.logger.add_history("创建Issue", f"{rp}#{resp.json().get('number', '')}", self.platform, rp)
+                    rd = resp.json()
+                    self.log(f"Issue创建成功：{rd.get('html_url', '')}")
+                    self.logger.add_history("创建Issue", f"{rp}#{rd.get('number', '')}", self.platform, rp)
                     self.root.after(0, self._load_issues)
                 else:
                     self.log(f"创建失败：{resp.status_code}")
@@ -2308,16 +2311,19 @@ class App:
             messagebox.showwarning("提示", "请输入PR标题和源分支")
             return
         
+        # 在主线程读取控件值
+        base = self.pr_base.get().strip() or "main"
+        body = self.pr_body.get("1.0", tk.END).strip()
+
         self._show_loading("正在创建PR...")
         def task():
             try:
                 owner, repo = rp.split("/", 1)
-                base = self.pr_base.get().strip() or "main"
-                body = self.pr_body.get("1.0", tk.END).strip()
                 resp = self.api.create_pull(owner, repo, title, head, base, body)
                 if resp.status_code == 201:
-                    self.log(f"PR创建成功：{resp.json().get('html_url', '')}")
-                    self.logger.add_history("创建PR", f"{rp}#{resp.json().get('number', '')}", self.platform, rp)
+                    rd = resp.json()
+                    self.log(f"PR创建成功：{rd.get('html_url', '')}")
+                    self.logger.add_history("创建PR", f"{rp}#{rd.get('number', '')}", self.platform, rp)
                     self.root.after(0, self._load_pulls)
                 else:
                     self.log(f"创建失败：{resp.status_code}")
@@ -3714,6 +3720,16 @@ class App:
                     self.logger.add_history("Fork仓库", rp, self.platform, rp)
                     if self.fk_auto.get():
                         lp = self.fk_local.get().strip() or os.path.join(os.getcwd(), repo)
+                        # GitHub fork is async (202); wait up to 30s for the repo to be ready
+                        if resp.status_code == 202:
+                            import time
+                            fork_owner = fd.get("owner", {}).get("login", self.api.username)
+                            fork_name = fd.get("name", repo)
+                            for _ in range(10):
+                                time.sleep(3)
+                                chk = self.api.get_repo(fork_owner, fork_name)
+                                if chk and chk.status_code == 200:
+                                    break
                         self.git.clone(self.api.get_clone_url(fd), lp)
                         self.log(f"克隆完成：{lp}")
                 else:
@@ -3828,6 +3844,13 @@ class App:
             messagebox.showerror("错误", "请输入Tag名称")
             return
         
+        # 在主线程读取所有控件值
+        rl_title = self.rl_title.get().strip() or tag
+        rl_body = self.rl_body.get("1.0", tk.END).strip()
+        rl_draft = self.rl_draft.get()
+        rl_pre = self.rl_pre.get()
+        assets = self.rl_assets_var.get().strip()
+
         self._show_loading("正在创建Release...")
         def task():
             try:
@@ -3840,16 +3863,13 @@ class App:
                 elif repo_resp.status_code != 200:
                     self.log(f"验证仓库失败：{repo_resp.status_code}")
                     return
-                
+
                 self.log(f"仓库验证通过，开始创建Release...")
-                title = self.rl_title.get().strip() or tag
-                body = self.rl_body.get("1.0", tk.END).strip()
-                resp = self.api.create_release(owner, repo, tag, title, body, self.rl_draft.get(), self.rl_pre.get())
+                resp = self.api.create_release(owner, repo, tag, rl_title, rl_body, rl_draft, rl_pre)
                 if resp.status_code == 201:
                     rd = resp.json()
                     self.log(f"Release 创建成功: {rd['html_url']}")
                     self.logger.add_history("创建Release", f"{rp} - {tag}", self.platform, rp)
-                    assets = self.rl_assets_var.get().strip()
                     if assets:
                         upload_url = rd.get("upload_url", "")
                         for fp in assets.split(";"):
@@ -3865,8 +3885,7 @@ class App:
                 elif resp.status_code == 404:
                     self.log(f"创建失败：无法创建Release，请检查仓库是否存在")
                 elif resp.status_code == 422:
-                    error_detail = resp.json().get("message", "")
-                    self.log(f"创建失败：数据验证错误 - {error_detail}")
+                    self.log(f"创建失败：数据验证错误 - {resp.json().get('message', '')}")
                 else:
                     self.log(f"创建失败: {resp.status_code}")
             except Exception as e:
@@ -3920,7 +3939,7 @@ class App:
                         lic = ""
                         if r.get("license"):
                             lic = r["license"].get("spdx_id", "") or r["license"].get("name", "") or ""
-                        updated = (r.get("updated_at") or r.get("updated_at", ""))[:10]
+                        updated = (r.get("updated_at") or "")[:10]
                         self.repo_tree.insert("", tk.END, values=(r["full_name"], vis, lic, lang, updated))
                 self.root.after(0, update)
                 self.log(f"加载了 {len(repos)} 个仓库")

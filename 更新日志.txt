@@ -14,6 +14,9 @@ v10.3.0 (2026-05-12)
 • 修复提交推送双重提交：_do_commit_push 在 pull 前后各提交一次，
   整合为 pull → add → 单次 commit → push
 • 修复日志轮转逻辑：.1 槽位从未创建，补充 rename(log_file → log_file.1)
+• 修复 Issue/PR/Release 创建中 Text 控件跨线程读取：将 .get() 调用移至线程外捕获
+• 修复 Fork 后立即克隆竞态：GitHub 202 表示异步创建，现等待仓库就绪（最多 30s）再克隆
+• 修复 _repos_load 冗余表达式：(r.get("updated_at") or r.get("updated_at","")) → (r.get("updated_at") or "")
 
 【安全加固】
 • export_config 导出时自动剥离 token_* 字段，防止凭据随配置文件泄露
