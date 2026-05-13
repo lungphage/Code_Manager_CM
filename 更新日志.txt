@@ -3,7 +3,6 @@ Code Manager 更新日志
 ========================================
 
 ----------------------------------------
-<<<<<<< HEAD
 v10.4.0 (2026-05-13)
 ----------------------------------------
 【性能优化】
@@ -17,6 +16,7 @@ v10.4.0 (2026-05-13)
 • 修复 NetworkManager 连续限流后返回 None：3 次 429 后函数隐式 return None，
   改为保存最后一个响应并返回，避免调用方 .status_code 崩溃
 • 修复 list_repos 三次重复解析 JSON：每次分页调用 r.json() 三次，改为缓存到 data
+• 修复 EXE 启动崩溃：Token 迁移写入异常不再阻断启动，改为 try/except 静默跳过
 
 【封装改进】
 • GitOps 新增 pull_unrelated(path, remote, branch)：封装 --allow-unrelated-histories 拉取
@@ -42,11 +42,8 @@ v10.4.0 (2026-05-13)
 • Token 加密本地存储：使用机器绑定的 XOR+base64 加密方案（_get_machine_key），
   配置文件中不再明文保存 Token，重启后自动解密恢复，无需重新输入
 • 退出时只清内存（_cleanup 不再覆写磁盘），加密 Token 在下次启动时可自动还原
-• 修复 EXE 启动崩溃：Token 迁移写入异常不再阻断启动，改为 try/except 静默跳过
 
 ----------------------------------------
-=======
->>>>>>> aa73d3a23ed849e4e7c41180f95c9b70d0a0b70b
 v10.3.0 (2026-05-12)
 ----------------------------------------
 【Bug 修复】
@@ -60,11 +57,7 @@ v10.3.0 (2026-05-12)
 • 修复日志轮转逻辑：.1 槽位从未创建，补充 rename(log_file → log_file.1)
 • 修复 Issue/PR/Release 创建中 Text 控件跨线程读取：将 .get() 调用移至线程外捕获
 • 修复 Fork 后立即克隆竞态：GitHub 202 表示异步创建，现等待仓库就绪（最多 30s）再克隆
-<<<<<<< HEAD
-• 修复 _repos_load 冗余表达式
-=======
 • 修复 _repos_load 冗余表达式：(r.get("updated_at") or r.get("updated_at","")) → (r.get("updated_at") or "")
->>>>>>> aa73d3a23ed849e4e7c41180f95c9b70d0a0b70b
 
 【安全加固】
 • export_config 导出时自动剥离 token_* 字段，防止凭据随配置文件泄露
