@@ -1,0 +1,13 @@
+# 通用
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.idea/
+.vscode/
+.project
+.settings/
+.classpath

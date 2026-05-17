@@ -1,0 +1,3877 @@
+﻿#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GitHub/Gitee Manager v10.5 - 本地代码托管管理工具
+Author: LZF
+Version: 10.5.0
+"""
+
+from __future__ import annotations
+
+__author__ = "LZF"
+__version__ = "10.5.0"
+
+import os
+import sys
+import re
+import json
+import subprocess
+import threading
+import atexit
+import time
+import csv
+import base64
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, scrolledtext, colorchooser, simpledialog
+import webbrowser
+import requests
+from datetime import datetime
+import platform
+import hashlib
+
+# ──────────────────────────── 路径与常量 ────────────────────────────
+
+if getattr(sys, 'frozen', False):
+    _BUNDLE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    _BUNDLE_DIR = os.path.dirname(os.path.abspath(__file__))
+    BASE_DIR = _BUNDLE_DIR
+
+APP_NAME = "Code Manager"
+APP_VERSION = __version__
+APP_AUTHOR = __author__
+CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".code_manager")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+PROFILES_DIR = os.path.join(CONFIG_DIR, "profiles")
+LOGS_DIR = os.path.join(CONFIG_DIR, "logs")
+HISTORY_FILE = os.path.join(CONFIG_DIR, "history.json")
+ICON_PATH = os.path.join(_BUNDLE_DIR, "icon.png")
+WEIXIN_PATH = os.path.join(_BUNDLE_DIR, "weixin.png")
+GIT_DOWNLOAD_URL = "https://git-scm.com/download/win"
+
+# ─── 运行时常量 ───
+MAX_LOG_SIZE = 5 * 1024 * 1024
+MAX_LOG_FILES = 5
+MAX_HISTORY = 1000
+HTTP_TIMEOUT = 30
+HTTP_RETRIES = 3
+RETRY_AFTER_DEFAULT = 60
+REPOS_PER_PAGE = 100
+SEARCH_PER_PAGE = 20
+ISSUES_PER_PAGE = 30
+WINDOW_SIZE = "1280x860"
+WINDOW_MIN_SIZE = (1100, 750)
+SIDEBAR_WIDTH = 200
+ICON_SUBSAMPLE = 80
+WEIXIN_SUBSAMPLE = 160
+
+os.makedirs(CONFIG_DIR, exist_ok=True)
+os.makedirs(PROFILES_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+
+PLATFORMS = {
+    "GitHub": {"api": "https://api.github.com", "web": "https://github.com", "token_note": "classic"},
+    "Gitee":  {"api": "https://gitee.com/api/v5", "web": "https://gitee.com", "token_note": ""},
+}
+
+LICENSES = {
+    "MIT License (MIT)": "mit",
+    "Apache License 2.0": "apache-2.0",
+    "GNU GPL v3.0": "gpl-3.0",
+    "GNU GPL v2.0": "gpl-2.0",
+    "BSD 3-Clause": "bsd-3-clause",
+    "BSD 2-Clause": "bsd-2-clause",
+    "Mozilla Public License 2.0": "mpl-2.0",
+    "The Unlicense": "unlicense",
+    "ISC License": "isc",
+    "GNU AGPL v3.0": "agpl-3.0",
+    "Creative Commons Zero v1.0": "cc0-1.0",
+    "Eclipse Public License 2.0": "epl-2.0",
+    "GNU LGPL v2.1": "lgpl-2.1",
+    "不使用开源协议": ""
+}
+
+LICENSE_DESC = {
+    "mit": "宽松许可，允许商用/修改/分发，需保留版权声明",
+    "apache-2.0": "允许商用，含专利授权条款，需保留声明",
+    "gpl-3.0": "强约束，衍生作品必须同样开源，禁止闭源使用",
+    "gpl-2.0": "GPLv2，与v3类似但无额外专利保护",
+    "bsd-3-clause": "宽松许可，禁止使用作者名做推广",
+    "bsd-2-clause": "极简BSD，仅保留版权声明",
+    "mpl-2.0": "文件级开源，修改的文件需开源，可与闭源组合",
+    "unlicense": "完全放弃版权，等同公共领域",
+    "isc": "极简宽松许可，类似MIT",
+    "agpl-3.0": "GPLv3扩展，网络使用也需开源",
+    "cc0-1.0": "公共领域贡献，无需署名",
+    "epl-2.0": "Eclipse常用，允许商用，修改需开源",
+    "lgpl-2.1": "允许链接使用，修改库本身需开源",
+    "": "不添加开源协议，代码默认受版权保护"
+}
+
+# ──────────────────────────── .gitignore 模板 ────────────────────────────
+
+GITIGNORE_TEMPLATES = {
+    "Python": """# Python
+*.pyc
+__pycache__/
+*.egg-info/
+dist/
+build/
+.env
+venv/
+.venv/
+*.egg
+.pytest_cache/
+.mypy_cache/
+""",
+    "Node.js": """# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+.env
+dist/
+build/
+.DS_Store
+""",
+    "Java": """# Java
+*.class
+*.jar
+*.war
+target/
+.gradle/
+.idea/
+*.iml
+""",
+    "C/C++": """# C/C++
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+build/
+.vs/
+*.suo
+*.user
+""",
+    "Go": """# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+""",
+    "通用": """# 通用
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.idea/
+.vscode/
+.project
+.settings/
+.classpath
+"""
+}
+
+# ──────────────────────────── 预设主题 ────────────────────────────
+
+THEMES = {
+    "Modern": {
+        "light": {
+            "bg": "#fafafa", "bg2": "#ffffff", "bg3": "#f5f5f5",
+            "fg": "#171717", "fg2": "#666666", "fg3": "#a3a3a3",
+            "accent": "#2563eb", "accent_hover": "#1d4ed8",
+            "accent_gradient": ("#2563eb", "#7c3aed"),
+            "header_bg": "#ffffff", "header_fg": "#171717",
+            "btn_bg": "#2563eb", "btn_fg": "#ffffff",
+            "btn2_bg": "#f5f5f5", "btn2_fg": "#171717",
+            "entry_bg": "#ffffff", "entry_fg": "#171717",
+            "select_bg": "#dbeafe", "select_fg": "#171717",
+            "log_bg": "#f8fafc", "log_fg": "#171717",
+            "tree_bg": "#ffffff", "tree_fg": "#171717",
+            "tree_heading_bg": "#f1f5f9",
+            "border": "#e5e7eb",
+            "tab_bg": "#ffffff", "tab_active": "#ffffff",
+            "sidebar_bg": "#f1f5f9", "sidebar_fg": "#64748b", "sidebar_active": "#2563eb",
+            "card_bg": "#ffffff", "card_border": "#e2e8f0",
+            "tooltip_bg": "#1e293b", "tooltip_fg": "#f8fafc",
+        },
+        "dark": {
+            "bg": "#0a0a0a", "bg2": "#171717", "bg3": "#1a1a1a",
+            "fg": "#fafafa", "fg2": "#a3a3a3", "fg3": "#525252",
+            "accent": "#3b82f6", "accent_hover": "#60a5fa",
+            "accent_gradient": ("#3b82f6", "#8b5cf6"),
+            "header_bg": "#0a0a0a", "header_fg": "#fafafa",
+            "btn_bg": "#3b82f6", "btn_fg": "#ffffff",
+            "btn2_bg": "#262626", "btn2_fg": "#fafafa",
+            "entry_bg": "#171717", "entry_fg": "#fafafa",
+            "select_bg": "#1e3a5f", "select_fg": "#fafafa",
+            "log_bg": "#0a0a0a", "log_fg": "#a3a3a3",
+            "tree_bg": "#171717", "tree_fg": "#fafafa",
+            "tree_heading_bg": "#262626",
+            "border": "#262626",
+            "tab_bg": "#171717", "tab_active": "#0a0a0a",
+            "sidebar_bg": "#111111", "sidebar_fg": "#737373", "sidebar_active": "#3b82f6",
+            "card_bg": "#171717", "card_border": "#262626",
+            "tooltip_bg": "#e2e8f0", "tooltip_fg": "#0a0a0a",
+        }
+    },
+    "微信(默认)": {
+        "light": {
+            "bg": "#f8f9fa", "bg2": "#ffffff", "bg3": "#f0f1f3",
+            "fg": "#1a1a2e", "fg2": "#4a4a6a", "fg3": "#8a8aa0",
+            "accent": "#07c160", "accent_hover": "#06ad56",
+            "header_bg": "#1a1a2e", "header_fg": "#ffffff",
+            "btn_bg": "#07c160", "btn_fg": "#ffffff",
+            "btn2_bg": "#f0f1f3", "btn2_fg": "#1a1a2e",
+            "entry_bg": "#ffffff", "entry_fg": "#1a1a2e",
+            "select_bg": "#d4edda", "select_fg": "#1a1a2e",
+            "log_bg": "#fafbfc", "log_fg": "#1a1a2e",
+            "tree_bg": "#ffffff", "tree_fg": "#1a1a2e",
+            "tree_heading_bg": "#f0f1f3",
+            "border": "#e2e4e8",
+            "tab_bg": "#f0f1f3", "tab_active": "#ffffff",
+        },
+        "dark": {
+            "bg": "#0d1117", "bg2": "#161b22", "bg3": "#1c2128",
+            "fg": "#e6edf3", "fg2": "#8b949e", "fg3": "#6e7681",
+            "accent": "#07c160", "accent_hover": "#06ad56",
+            "header_bg": "#010409", "header_fg": "#e6edf3",
+            "btn_bg": "#07c160", "btn_fg": "#ffffff",
+            "btn2_bg": "#21262d", "btn2_fg": "#e6edf3",
+            "entry_bg": "#0d1117", "entry_fg": "#e6edf3",
+            "select_bg": "#0a4a2a", "select_fg": "#e6edf3",
+            "log_bg": "#0d1117", "log_fg": "#8b949e",
+            "tree_bg": "#0d1117", "tree_fg": "#e6edf3",
+            "tree_heading_bg": "#161b22",
+            "border": "#30363d",
+            "tab_bg": "#161b22", "tab_active": "#0d1117",
+        }
+    },
+    "VSCode": {
+        "light": {
+            "bg": "#f8f9fa", "bg2": "#ffffff", "bg3": "#f0f1f3",
+            "fg": "#1a1a2e", "fg2": "#4a4a6a", "fg3": "#8a8aa0",
+            "accent": "#007acc", "accent_hover": "#0062a3",
+            "header_bg": "#1e1e1e", "header_fg": "#ffffff",
+            "btn_bg": "#007acc", "btn_fg": "#ffffff",
+            "btn2_bg": "#f0f1f3", "btn2_fg": "#1a1a2e",
+            "entry_bg": "#ffffff", "entry_fg": "#1a1a2e",
+            "select_bg": "#cce8ff", "select_fg": "#1a1a2e",
+            "log_bg": "#fafbfc", "log_fg": "#1a1a2e",
+            "tree_bg": "#ffffff", "tree_fg": "#1a1a2e",
+            "tree_heading_bg": "#f0f1f3",
+            "border": "#e2e4e8",
+            "tab_bg": "#f0f1f3", "tab_active": "#ffffff",
+        },
+        "dark": {
+            "bg": "#0d1117", "bg2": "#161b22", "bg3": "#1c2128",
+            "fg": "#e6edf3", "fg2": "#8b949e", "fg3": "#6e7681",
+            "accent": "#007acc", "accent_hover": "#1a8ad4",
+            "header_bg": "#010409", "header_fg": "#e6edf3",
+            "btn_bg": "#0e639c", "btn_fg": "#ffffff",
+            "btn2_bg": "#21262d", "btn2_fg": "#e6edf3",
+            "entry_bg": "#0d1117", "entry_fg": "#e6edf3",
+            "select_bg": "#094771", "select_fg": "#e6edf3",
+            "log_bg": "#0d1117", "log_fg": "#8b949e",
+            "tree_bg": "#0d1117", "tree_fg": "#e6edf3",
+            "tree_heading_bg": "#161b22",
+            "border": "#30363d",
+            "tab_bg": "#161b22", "tab_active": "#0d1117",
+        }
+    },
+    "Cursor": {
+        "light": {
+            "bg": "#f7f7f8", "bg2": "#ffffff", "bg3": "#f0f0f2",
+            "fg": "#2d2d30", "fg2": "#5c5c63", "fg3": "#9898a0",
+            "accent": "#7c3aed", "accent_hover": "#6d28d9",
+            "header_bg": "#2d2d30", "header_fg": "#ffffff",
+            "btn_bg": "#7c3aed", "btn_fg": "#ffffff",
+            "btn2_bg": "#f0f0f2", "btn2_fg": "#2d2d30",
+            "entry_bg": "#ffffff", "entry_fg": "#2d2d30",
+            "select_bg": "#ede9fe", "select_fg": "#2d2d30",
+            "log_bg": "#fafafa", "log_fg": "#2d2d30",
+            "tree_bg": "#ffffff", "tree_fg": "#2d2d30",
+            "tree_heading_bg": "#f0f0f2",
+            "border": "#e2e2e6",
+            "tab_bg": "#eaeaed", "tab_active": "#ffffff",
+        },
+        "dark": {
+            "bg": "#1a1a2e", "bg2": "#22223a", "bg3": "#1e1e32",
+            "fg": "#e0e0ec", "fg2": "#a0a0b8", "fg3": "#6c6c84",
+            "accent": "#7c3aed", "accent_hover": "#9061f0",
+            "header_bg": "#16162a", "header_fg": "#e0e0ec",
+            "btn_bg": "#7c3aed", "btn_fg": "#ffffff",
+            "btn2_bg": "#2a2a44", "btn2_fg": "#e0e0ec",
+            "entry_bg": "#2a2a44", "entry_fg": "#e0e0ec",
+            "select_bg": "#3b2274", "select_fg": "#e0e0ec",
+            "log_bg": "#1e1e32", "log_fg": "#ccccdd",
+            "tree_bg": "#22223a", "tree_fg": "#e0e0ec",
+            "tree_heading_bg": "#2a2a44",
+            "border": "#3a3a54",
+            "tab_bg": "#2a2a44", "tab_active": "#22223a",
+        }
+    }
+}
+
+CUSTOM_THEME_TEMPLATE = {
+    "light": {
+        "bg": "#f5f5f5", "bg2": "#ffffff", "bg3": "#ededed",
+        "fg": "#333333", "fg2": "#666666", "fg3": "#999999",
+        "accent": "#4a90d9", "accent_hover": "#3a7bc8",
+        "header_bg": "#3a3a3a", "header_fg": "#ffffff",
+        "btn_bg": "#4a90d9", "btn_fg": "#ffffff",
+        "btn2_bg": "#ededed", "btn2_fg": "#333333",
+        "entry_bg": "#ffffff", "entry_fg": "#333333",
+        "select_bg": "#cce5ff", "select_fg": "#333333",
+        "log_bg": "#fafafa", "log_fg": "#333333",
+        "tree_bg": "#ffffff", "tree_fg": "#333333",
+        "tree_heading_bg": "#ededed",
+        "border": "#e0e0e0",
+        "tab_bg": "#e8e8e8", "tab_active": "#ffffff",
+        "sidebar_bg": "#f0f0f0", "sidebar_fg": "#666666", "sidebar_active": "#4a90d9",
+        "card_bg": "#ffffff", "card_border": "#e0e0e0",
+        "tooltip_bg": "#333333", "tooltip_fg": "#ffffff",
+    },
+    "dark": {
+        "bg": "#1e1e1e", "bg2": "#2d2d2d", "bg3": "#252525",
+        "fg": "#e0e0e0", "fg2": "#aaaaaa", "fg3": "#777777",
+        "accent": "#4a90d9", "accent_hover": "#5aa0e9",
+        "header_bg": "#1a1a1a", "header_fg": "#e0e0e0",
+        "btn_bg": "#4a90d9", "btn_fg": "#ffffff",
+        "btn2_bg": "#3a3a3a", "btn2_fg": "#e0e0e0",
+        "entry_bg": "#2d2d2d", "entry_fg": "#e0e0e0",
+        "select_bg": "#1a3a5c", "select_fg": "#e0e0e0",
+        "log_bg": "#252525", "log_fg": "#cccccc",
+        "tree_bg": "#2d2d2d", "tree_fg": "#e0e0e0",
+        "tree_heading_bg": "#383838",
+        "border": "#404040",
+        "tab_bg": "#333333", "tab_active": "#2d2d2d",
+        "sidebar_bg": "#252525", "sidebar_fg": "#888888", "sidebar_active": "#4a90d9",
+        "card_bg": "#2d2d2d", "card_border": "#404040",
+        "tooltip_bg": "#e0e0e0", "tooltip_fg": "#333333",
+    }
+}
+
+# ──────────────────────────── 工具函数 ────────────────────────────
+
+def load_config(profile="default"):
+    config_file = os.path.join(PROFILES_DIR, f"{profile}.json")
+    if os.path.exists(config_file):
+        with open(config_file, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    elif os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    else:
+        cfg = {}
+    
+    # 解密磁盘中存储的 token
+    for k in list(cfg.keys()):
+        if (k.startswith("token_") or k == "token") and cfg[k]:
+            cfg[k] = decrypt_token(cfg[k])
+
+    # 环境变量覆盖
+    if os.environ.get("CM_TOKEN_GITHUB"):
+        cfg["token_github"] = os.environ["CM_TOKEN_GITHUB"]
+    if os.environ.get("CM_TOKEN_GITEE"):
+        cfg["token_gitee"] = os.environ["CM_TOKEN_GITEE"]
+    if os.environ.get("CM_PROXY"):
+        cfg["proxy"] = os.environ["CM_PROXY"]
+
+    return cfg
+
+def save_config(config, profile="default"):
+    config_file = os.path.join(PROFILES_DIR, f"{profile}.json")
+    on_disk = dict(config)
+    for k in list(on_disk.keys()):
+        if (k.startswith("token_") or k == "token") and on_disk[k]:
+            on_disk[k] = encrypt_token(on_disk[k])
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(on_disk, f, indent=2, ensure_ascii=False)
+
+def mask_token(token):
+    if not token or len(token) < 12:
+        return "****"
+    return token[:6] + "****" + token[-4:]
+
+def _get_machine_key() -> bytes:
+    machine_id = platform.node() + platform.machine()
+    return hashlib.sha256(machine_id.encode()).digest()
+
+def encrypt_token(token: str) -> str:
+    if not token:
+        return ""
+    key = _get_machine_key()
+    token_bytes = token.encode("utf-8")
+    xor_bytes = bytes(b ^ key[i % len(key)] for i, b in enumerate(token_bytes))
+    return "enc:" + base64.b64encode(xor_bytes).decode("ascii")
+
+def decrypt_token(stored: str) -> str:
+    if not stored or not stored.startswith("enc:"):
+        return stored
+    try:
+        key = _get_machine_key()
+        xor_bytes = base64.b64decode(stored[4:])
+        return bytes(b ^ key[i % len(key)] for i, b in enumerate(xor_bytes)).decode("utf-8")
+    except Exception:
+        return ""
+
+def check_git_installed():
+    try:
+        r = subprocess.run(["git", "--version"], capture_output=True, text=True, timeout=5)
+        return r.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+def validate_repo_name(name):
+    if not name:
+        return False, "仓库名称不能为空"
+    if not re.match(r'^[a-zA-Z0-9._-]+$', name):
+        return False, "仓库名称只能包含字母、数字、点、下划线和连字符"
+    if len(name) > 100:
+        return False, "仓库名称不能超过100个字符"
+    return True, ""
+
+def validate_branch_name(name):
+    if not name:
+        return False, "分支名不能为空"
+    if not re.match(r'^[a-zA-Z0-9._/-]+$', name):
+        return False, "分支名只能包含字母、数字、点、下划线、连字符和斜杠"
+    if '..' in name or name.startswith('.') or name.endswith('.'):
+        return False, "分支名不能包含连续的点，也不能以点开头或结尾"
+    return True, ""
+
+def validate_owner_repo(text):
+    if not text or '/' not in text:
+        return False, "请输入格式：用户名/仓库名"
+    parts = text.split('/', 1)
+    if not parts[0] or not parts[1]:
+        return False, "用户名和仓库名都不能为空"
+    return True, ""
+
+
+# ──────────────────────────── ToolTip 类 ────────────────────────────
+
+class ToolTip:
+    """自定义美化提示框"""
+    def __init__(self, widget, text, theme=None, delay=500):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._tip_window = None
+        self._after_id = None
+        t = theme or {}
+        self._bg = t.get("tooltip_bg", "#1e293b")
+        self._fg = t.get("tooltip_fg", "#f8fafc")
+        self._font = t.get("tooltip_font", ("Segoe UI", 9))
+        widget.bind("<Enter>", self._on_enter, add="+")
+        widget.bind("<Leave>", self._on_leave, add="+")
+        widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None):
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _on_leave(self, event=None):
+        self._cancel()
+        self._hide()
+
+    def _cancel(self):
+        if self._after_id:
+            self.widget.after_cancel(self._after_id)
+            self._after_id = None
+
+    def _show(self):
+        if self._tip_window:
+            return
+        x = self.widget.winfo_rootx() + 20
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self._tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        try:
+            tw.wm_attributes("-topmost", True)
+        except Exception:
+            pass
+        frame = tk.Frame(tw, bg=self._bg, highlightbackground=self._bg,
+                         highlightthickness=1, padx=8, pady=4)
+        frame.pack()
+        lbl = tk.Label(frame, text=self.text, bg=self._bg, fg=self._fg,
+                       font=self._font, anchor=tk.W, justify=tk.LEFT)
+        lbl.pack()
+
+    def _hide(self):
+        if self._tip_window:
+            self._tip_window.destroy()
+            self._tip_window = None
+
+    def update_text(self, text):
+        self.text = text
+
+    def destroy(self):
+        self._cancel()
+        self._hide()
+
+
+# ──────────────────────────── GradientButton 类 ────────────────────────────
+
+class GradientButton(tk.Canvas):
+    """渐变色圆角按钮"""
+    def __init__(self, parent, text, command=None,
+                 gradient_colors=("#2563eb", "#7c3aed"),
+                 fg="#ffffff", width=160, height=36,
+                 font=("Segoe UI", 10, "bold"), **kwargs):
+        super().__init__(parent, width=width, height=height,
+                         highlightthickness=0, bg=parent.cget("bg") if isinstance(parent, tk.Frame) else "#ffffff", **kwargs)
+        self._width = width
+        self._height = height
+        self._text = text
+        self._command = command
+        self._colors = gradient_colors
+        self._fg = fg
+        self._font = font
+        self._hover = False
+        self._draw(gradient_colors)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
+        self.bind("<Button-1>", self._on_click)
+        self.configure(cursor="hand2")
+
+    def _lerp_color(self, c1, c2, t):
+        r1, g1, b1 = int(c1[1:3], 16), int(c1[3:5], 16), int(c1[5:7], 16)
+        r2, g2, b2 = int(c2[1:3], 16), int(c2[3:5], 16), int(c2[5:7], 16)
+        r = int(r1 + (r2 - r1) * t)
+        g = int(g1 + (g2 - g1) * t)
+        b = int(b1 + (b2 - b1) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    def _brighten(self, color, amount=0.15):
+        white = "#ffffff"
+        return self._lerp_color(color, white, amount)
+
+    def _draw(self, colors):
+        self.delete("all")
+        w, h = self._width, self._height
+        r = 6
+        # 缓存渐变色列表，colors 不变时不重新计算
+        if getattr(self, "_cached_colors", None) != colors:
+            self._cached_colors = colors
+            self._gradient = [
+                self._lerp_color(colors[0], colors[1], i / max(w - 1, 1))
+                for i in range(w)
+            ]
+        # 圆角遮罩（固色弧形 + 矩形填充主体）
+        self.create_arc(0, 0, 2*r, 2*r, start=90, extent=90, fill=colors[0], outline="")
+        self.create_arc(w-2*r, 0, w, 2*r, start=0, extent=90, fill=colors[1], outline="")
+        self.create_arc(0, h-2*r, 2*r, h, start=180, extent=90, fill=colors[0], outline="")
+        self.create_arc(w-2*r, h-2*r, w, h, start=270, extent=90, fill=colors[1], outline="")
+        self.create_rectangle(r, 0, w-r, h, fill=colors[0], outline="")
+        self.create_rectangle(0, r, w, h-r, fill=colors[0], outline="")
+        # 渐变线只绘制一次（内部区域）
+        for i, c in enumerate(self._gradient):
+            self.create_line(i, 1, i, h-1, fill=c)
+        self.create_text(w//2, h//2, text=self._text, fill=self._fg, font=self._font)
+
+    def _on_enter(self, event=None):
+        self._hover = True
+        bright = (self._brighten(self._colors[0]), self._brighten(self._colors[1]))
+        self._draw(bright)
+
+    def _on_leave(self, event=None):
+        self._hover = False
+        self._draw(self._colors)
+
+    def _on_click(self, event=None):
+        if self._command:
+            self._command()
+
+    def set_colors(self, colors):
+        self._colors = colors
+        self._draw(colors)
+
+    def set_text(self, text):
+        self._text = text
+        self._draw(self._colors)
+
+    def set_command(self, command):
+        self._command = command
+
+
+# ──────────────────────────── Logger 类 ────────────────────────────
+
+class Logger:
+    def __init__(self, log_dir=None, ui_callback=None):
+        self.log_dir = log_dir or LOGS_DIR
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.ui_callback = ui_callback
+        self.history_file = HISTORY_FILE
+        self._max_size = MAX_LOG_SIZE
+        self._max_files = MAX_LOG_FILES
+
+    def log(self, msg, level="INFO"):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{ts}] [{level}] {msg}"
+        self._write_to_file(line)
+        if self.ui_callback:
+            self.ui_callback(f"[{datetime.now():%H:%M:%S}] {msg}")
+
+    def add_history(self, action, detail, platform="", repo=""):
+        history = self._load_history()
+        history.append({
+            "time": datetime.now().isoformat(),
+            "action": action,
+            "detail": detail,
+            "platform": platform,
+            "repo": repo
+        })
+        if len(history) > MAX_HISTORY:
+            history = history[-1000:]
+        self._save_history(history)
+
+    def get_history(self, limit=50):
+        history = self._load_history()
+        return history[-limit:]
+
+    def clear_history(self):
+        self._save_history([])
+
+    def _write_to_file(self, line):
+        log_file = os.path.join(self.log_dir, f"{datetime.now():%Y-%m-%d}.log")
+        if os.path.exists(log_file) and os.path.getsize(log_file) > self._max_size:
+            self._rotate_logs(log_file)
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+
+    def _rotate_logs(self, log_file):
+        # 从最旧的往前移：.4 删除，.3→.4，.2→.3，.1→.2，原文件→.1
+        for i in range(self._max_files - 1, 0, -1):
+            src = f"{log_file}.{i}"
+            dst = f"{log_file}.{i + 1}"
+            if os.path.exists(src):
+                if i == self._max_files - 1:
+                    os.remove(src)
+                else:
+                    os.rename(src, dst)
+        if os.path.exists(log_file):
+            os.rename(log_file, f"{log_file}.1")
+
+    def _load_history(self):
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError, OSError):
+                pass
+        return []
+
+    def _save_history(self, history):
+        with open(self.history_file, "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+
+# ──────────────────────────── NetworkManager 类 ────────────────────────────
+
+class NetworkManager:
+    def __init__(self, logger=None, proxy=None, timeout=HTTP_TIMEOUT):
+        self.logger = logger
+        self.proxy = proxy
+        self.timeout = timeout
+        self._session = requests.Session()
+        if proxy:
+            self._session.proxies = {"http": proxy, "https": proxy}
+
+    def request(self, method, url, headers=None, **kwargs):
+        kwargs.setdefault("timeout", self.timeout)
+        if headers:
+            kwargs["headers"] = headers
+        last_response = None
+        for attempt in range(HTTP_RETRIES):
+            try:
+                r = self._session.request(method, url, **kwargs)
+                if r.status_code == 429:
+                    last_response = r
+                    wait = int(r.headers.get("Retry-After", RETRY_AFTER_DEFAULT))
+                    if self.logger:
+                        self.logger.log(f"API限流，等待{wait}秒...", "WARNING")
+                    time.sleep(wait)
+                    continue
+                return r
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    if self.logger:
+                        self.logger.log(f"请求失败，{wait}秒后重试...", "WARNING")
+                    time.sleep(wait)
+                else:
+                    raise
+        return last_response
+
+    def set_proxy(self, proxy):
+        self.proxy = proxy
+        self._session.proxies = {"http": proxy, "https": proxy} if proxy else {}
+
+    def set_timeout(self, timeout):
+        self.timeout = timeout
+
+# ──────────────────────────── ConfigManager 类 ────────────────────────────
+
+class ConfigManager:
+    def __init__(self, config_dir=None):
+        self.config_dir = config_dir or CONFIG_DIR
+        self.profiles_dir = os.path.join(self.config_dir, "profiles")
+        os.makedirs(self.profiles_dir, exist_ok=True)
+
+    def load_profile(self, name="default"):
+        return load_config(name)
+
+    def save_profile(self, name, config):
+        save_config(config, name)
+
+    def list_profiles(self):
+        profiles = []
+        if os.path.exists(self.profiles_dir):
+            for f in os.listdir(self.profiles_dir):
+                if f.endswith(".json"):
+                    profiles.append(f[:-5])
+        return profiles if profiles else ["default"]
+
+    def delete_profile(self, name):
+        if name == "default":
+            return False
+        profile_file = os.path.join(self.profiles_dir, f"{name}.json")
+        if os.path.exists(profile_file):
+            os.remove(profile_file)
+            return True
+        return False
+
+    def export_config(self, path, profile="default"):
+        config = self.load_profile(profile)
+        # 导出时剥离 token，防止凭据泄露
+        safe = {k: v for k, v in config.items() if not k.startswith("token")}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(safe, f, indent=2, ensure_ascii=False)
+        return True
+
+    def import_config(self, path, profile="default"):
+        with open(path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        self.save_profile(profile, config)
+        return True
+
+# ──────────────────────────── 平台 API ────────────────────────────
+
+class PlatformAPI:
+    def __init__(self, platform: str, token: str, logger=None, proxy: str | None = None, timeout: int = HTTP_TIMEOUT) -> None:
+        self.platform = platform
+        self.base = PLATFORMS[platform]["api"]
+        self.web = PLATFORMS[platform]["web"]
+        self.is_github = (platform == "GitHub")
+        self.logger = logger
+        self._token = token
+        self.username = ""
+
+        if self.is_github:
+            self.headers = {
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github.v3+json"
+            }
+        else:
+            self.headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+
+        self._net = NetworkManager(logger=logger, proxy=proxy, timeout=timeout)
+
+    def _req(self, method: str, url: str, **kwargs) -> requests.Response:
+        kwargs["headers"] = self.headers
+        return self._net.request(method, url, **kwargs)
+
+    # ─── 用户相关 ───
+
+    def get_user(self) -> dict | None:
+        r = self._req("GET", f"{self.base}/user")
+        if r.status_code == 200:
+            d = r.json()
+            if self.is_github:
+                self.username = d.get("login", "")
+                return d
+            login = d.get("login") or d.get("name", "")
+            self.username = login
+            return {"login": login, "email": d.get("email", "N/A")}
+        return None
+
+    # ─── 仓库相关 ───
+
+    def list_repos(self, page: int = 1, per_page: int = REPOS_PER_PAGE) -> list:
+        repos = []
+        while True:
+            params = {"per_page": per_page, "page": page, "sort": "updated"}
+            if not self.is_github:
+                params["type"] = "all"
+            r = self._req("GET", f"{self.base}/user/repos", params=params)
+            if r.status_code != 200:
+                break
+            data = r.json()
+            if not data:
+                break
+            repos.extend(data)
+            page += 1
+            if len(data) < per_page:
+                break
+        return repos
+
+    def create_repo(self, name: str, desc: str = "", private: bool = False, license_key: str = "", auto_init: bool = True) -> requests.Response:
+        data = {"name": name, "description": desc, "private": private, "auto_init": auto_init}
+        if license_key:
+            if self.is_github:
+                data["license_template"] = license_key
+            else:
+                data["license"] = license_key
+        return self._req("POST", f"{self.base}/user/repos", json=data)
+
+    def get_repo(self, owner: str, repo: str) -> requests.Response:
+        return self._req("GET", f"{self.base}/repos/{owner}/{repo}")
+
+    def delete_repo(self, owner: str, repo: str) -> requests.Response:
+        return self._req("DELETE", f"{self.base}/repos/{owner}/{repo}")
+
+    def fork_repo(self, owner: str, repo: str) -> requests.Response:
+        return self._req("POST", f"{self.base}/repos/{owner}/{repo}/forks")
+
+    def search_repos(self, query: str, page: int = 1, per_page: int = SEARCH_PER_PAGE) -> list:
+        if self.is_github:
+            url = f"{self.base}/search/repositories"
+            params = {"q": query, "per_page": per_page, "page": page}
+        else:
+            url = f"{self.base}/projects/search"
+            params = {"q": query, "per_page": per_page, "page": page}
+        r = self._req("GET", url, params=params)
+        if r.status_code == 200:
+            data = r.json()
+            return data.get("items", data.get("projects", []))
+        return []
+
+    # ─── 分支相关 ───
+
+    def list_branches(self, owner: str, repo: str) -> list:
+        r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/branches")
+        return r.json() if r.status_code == 200 else []
+
+    def create_branch(self, owner: str, repo: str, new_branch: str, sha: str) -> requests.Response:
+        if self.is_github:
+            return self._req("POST", f"{self.base}/repos/{owner}/{repo}/git/refs",
+                             json={"ref": f"refs/heads/{new_branch}", "sha": sha})
+        else:
+            return self._req("POST", f"{self.base}/repos/{owner}/{repo}/branches",
+                             json={"branch_name": new_branch, "ref": sha})
+
+    def delete_branch(self, owner: str, repo: str, branch: str) -> requests.Response:
+        return self._req("DELETE", f"{self.base}/repos/{owner}/{repo}/branches/{branch}")
+
+    def get_branch_sha(self, owner: str, repo: str, branch: str) -> str | None:
+        if self.is_github:
+            r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/git/refs/heads/{branch}")
+            return r.json()["object"]["sha"] if r.status_code == 200 else None
+        else:
+            r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/branches/{branch}")
+            return r.json()["commit"]["sha"] if r.status_code == 200 else None
+
+    # ─── Release相关 ───
+
+    def list_releases(self, owner: str, repo: str) -> list:
+        r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/releases")
+        return r.json() if r.status_code == 200 else []
+
+    def create_release(self, owner: str, repo: str, tag: str, name: str = "", body: str = "", draft: bool = False, prerelease: bool = False) -> requests.Response:
+        data = {"tag_name": tag, "name": name or tag, "body": body, "draft": draft, "prerelease": prerelease}
+        return self._req("POST", f"{self.base}/repos/{owner}/{repo}/releases", json=data)
+
+    def upload_release_asset(self, upload_url: str, file_path: str, content_type: str = "application/octet-stream") -> requests.Response | None:
+        if self.is_github:
+            url = upload_url.split("{")[0]
+            params = {"name": os.path.basename(file_path)}
+            headers = {"Authorization": self.headers["Authorization"], "Content-Type": content_type}
+            with open(file_path, "rb") as f:
+                return self._net.request("POST", url, params=params, headers=headers, data=f)
+        return None
+
+    # ─── Issue管理 ───
+
+    def list_issues(self, owner: str, repo: str, state: str = "open", page: int = 1, per_page: int = ISSUES_PER_PAGE) -> list:
+        params = {"state": state, "per_page": per_page, "page": page}
+        r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/issues", params=params)
+        return r.json() if r.status_code == 200 else []
+
+    def create_issue(self, owner: str, repo: str, title: str, body: str = "", labels: list | None = None, assignees: list | None = None) -> requests.Response:
+        data = {"title": title, "body": body}
+        if labels:
+            data["labels"] = labels
+        if assignees:
+            data["assignees"] = assignees
+        return self._req("POST", f"{self.base}/repos/{owner}/{repo}/issues", json=data)
+
+    def update_issue(self, owner: str, repo: str, issue_number: int, title: str | None = None, body: str | None = None, state: str | None = None) -> requests.Response:
+        data = {}
+        if title:
+            data["title"] = title
+        if body:
+            data["body"] = body
+        if state:
+            data["state"] = state
+        return self._req("PATCH", f"{self.base}/repos/{owner}/{repo}/issues/{issue_number}", json=data)
+
+    def close_issue(self, owner: str, repo: str, issue_number: int) -> requests.Response:
+        return self.update_issue(owner, repo, issue_number, state="closed")
+
+    # ─── PR管理 ───
+
+    def list_pulls(self, owner: str, repo: str, state: str = "open", page: int = 1, per_page: int = ISSUES_PER_PAGE) -> list:
+        params = {"state": state, "per_page": per_page, "page": page}
+        r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/pulls", params=params)
+        return r.json() if r.status_code == 200 else []
+
+    def create_pull(self, owner: str, repo: str, title: str, head: str, base: str = "main", body: str = "") -> requests.Response:
+        data = {"title": title, "head": head, "base": base, "body": body}
+        return self._req("POST", f"{self.base}/repos/{owner}/{repo}/pulls", json=data)
+
+    def merge_pull(self, owner: str, repo: str, pull_number: int, commit_message: str = "") -> requests.Response:
+        data = {"commit_message": commit_message}
+        return self._req("PUT", f"{self.base}/repos/{owner}/{repo}/pulls/{pull_number}/merge", json=data)
+
+    def close_pull(self, owner: str, repo: str, pull_number: int) -> requests.Response:
+        data = {"state": "closed"}
+        return self._req("PATCH", f"{self.base}/repos/{owner}/{repo}/pulls/{pull_number}", json=data)
+
+    # ─── Webhook管理 ───
+
+    def list_webhooks(self, owner: str, repo: str) -> list:
+        r = self._req("GET", f"{self.base}/repos/{owner}/{repo}/hooks")
+        return r.json() if r.status_code == 200 else []
+
+    def create_webhook(self, owner: str, repo: str, url: str, events: list | None = None, secret: str = "") -> requests.Response:
+        if events is None:
+            events = ["push"]
+        data = {
+            "name": "web",
+            "active": True,
+            "events": events,
+            "config": {
+                "url": url,
+                "content_type": "json",
+                "secret": secret
+            }
+        }
+        return self._req("POST", f"{self.base}/repos/{owner}/{repo}/hooks", json=data)
+
+    def delete_webhook(self, owner: str, repo: str, hook_id: int) -> requests.Response:
+        return self._req("DELETE", f"{self.base}/repos/{owner}/{repo}/hooks/{hook_id}")
+
+    def test_webhook(self, owner: str, repo: str, hook_id: int) -> requests.Response:
+        return self._req("POST", f"{self.base}/repos/{owner}/{repo}/hooks/{hook_id}/tests")
+
+    # ─── 辅助方法 ───
+
+    def get_clone_url(self, repo_data: dict) -> str:
+        if self.is_github:
+            return repo_data.get("clone_url", "")
+        url = repo_data.get("clone_url", "") or repo_data.get("html_url", "")
+        return url if url.endswith(".git") else url.rstrip("/") + ".git"
+
+    def get_html_url(self, repo_data: dict) -> str:
+        return repo_data.get("html_url", "")
+
+# ──────────────────────────── Git 操作 ────────────────────────────
+
+class GitOps:
+    def __init__(self, log_fn=None) -> None:
+        self.log_fn = log_fn or print
+        self._safe_dirs = set()
+
+    def _add_safe_dir(self, path: str) -> None:
+        abs_path = os.path.abspath(path)
+        if abs_path not in self._safe_dirs:
+            subprocess.run(["git", "config", "--global", "--add", "safe.directory", abs_path],
+                           capture_output=True, timeout=10)
+            self._safe_dirs.add(abs_path)
+
+    def _run(self, args: list, cwd: str | None = None) -> tuple:
+        try:
+            r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=120)
+            output = (r.stdout or "") + (r.stderr or "")
+            if "dubious ownership" in output and cwd:
+                self.log_fn("检测到文件系统所有权问题，自动修复中...")
+                self._add_safe_dir(cwd)
+                r = subprocess.run(["git"] + args, cwd=cwd, capture_output=True,
+                                   text=True, encoding="utf-8", errors="replace", timeout=120)
+            if r.stdout.strip():
+                self.log_fn(r.stdout.strip())
+            if r.stderr.strip():
+                self.log_fn(r.stderr.strip())
+            return r.returncode == 0, r.stdout, r.stderr
+        except FileNotFoundError:
+            self.log_fn("错误：未找到git命令")
+            return False, "", "git not found"
+        except subprocess.TimeoutExpired:
+            self.log_fn("错误：git命令执行超时")
+            return False, "", "timeout"
+        except Exception as e:
+            self.log_fn(f"错误：{e}")
+            return False, "", str(e)
+
+    def is_repo(self, path: str) -> bool:
+        return os.path.isdir(os.path.join(path, ".git"))
+
+    def init(self, path: str) -> tuple:
+        self.log_fn(f"git init → {path}")
+        return self._run(["init"], cwd=path)
+
+    def set_user_info(self, path: str, name: str, email: str) -> None:
+        self._run(["config", "user.name", name], cwd=path)
+        self._run(["config", "user.email", email], cwd=path)
+
+    def has_commits(self, path: str) -> bool:
+        ok, out, _ = self._run(["rev-parse", "HEAD"], cwd=path)
+        return ok
+
+    def ensure_branch(self, path: str, target_branch: str) -> bool:
+        current = self.current_branch(path)
+        if current == target_branch:
+            return True
+        if not self.has_commits(path):
+            self.add_all(path)
+            self.commit(path, "Initial commit")
+            current = self.current_branch(path)
+        if current and current != target_branch:
+            self.log_fn(f"重命名分支 {current} → {target_branch}")
+            self.rename_branch(path, current, target_branch)
+        return True
+
+    def remote(self, path: str, url: str, name: str = "origin") -> tuple:
+        ok, _, _ = self._run(["remote", "get-url", name], cwd=path)
+        if ok:
+            return self._run(["remote", "set-url", name, url], cwd=path)
+        return self._run(["remote", "add", name, url], cwd=path)
+
+    def add_all(self, path: str) -> tuple:
+        return self._run(["add", "-A"], cwd=path)
+
+    def commit(self, path: str, msg: str) -> tuple:
+        self.log_fn(f'git commit -m "{msg}"')
+        return self._run(["commit", "-m", msg], cwd=path)
+
+    def push(self, path: str, remote: str = "origin", branch: str = "main", force: bool = False) -> tuple:
+        args = ["push", "-u", remote, branch]
+        if force:
+            args.insert(1, "--force")
+        return self._run(args, cwd=path)
+
+    def pull(self, path: str, remote: str = "origin", branch: str = "main") -> tuple:
+        return self._run(["pull", remote, branch], cwd=path)
+
+    def pull_unrelated(self, path: str, remote: str = "origin", branch: str = "main") -> tuple:
+        """拉取远程，允许无关历史（首次推送前同步许可证等文件）。"""
+        return self._run(
+            ["pull", remote, branch, "--allow-unrelated-histories", "--no-edit"],
+            cwd=path
+        )
+
+    def pull_with_strategy(self, path: str, remote: str = "origin", branch: str = "main", strategy: str | None = None) -> tuple:
+        """拉取远程，可指定合并策略（如 ours）。"""
+        args = ["pull", remote, branch, "--allow-unrelated-histories", "--no-edit"]
+        if strategy:
+            args += ["-X", strategy]
+        return self._run(args, cwd=path)
+
+    def checkout(self, path: str, branch: str, create: bool = False) -> tuple:
+        args = ["checkout", "-b", branch] if create else ["checkout", branch]
+        return self._run(args, cwd=path)
+
+    def current_branch(self, path: str) -> str | None:
+        ok, out, _ = self._run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=path)
+        return out.strip() if ok else None
+
+    def rename_branch(self, path: str, old_name: str, new_name: str) -> tuple:
+        return self._run(["branch", "-m", old_name, new_name], cwd=path)
+
+    def status(self, path: str) -> str:
+        ok, out, _ = self._run(["status", "--porcelain"], cwd=path)
+        return out.strip() if ok else ""
+
+    def log(self, path: str, n: int = 10) -> str:
+        ok, out, _ = self._run(["log", "--oneline", f"-{n}"], cwd=path)
+        return out.strip() if ok else ""
+
+    def clone(self, url: str, path: str) -> tuple:
+        return self._run(["clone", url, path])
+
+    # ─── 新增功能 ───
+
+    def create_gitignore(self, path: str, template: str = "通用") -> bool:
+        content = GITIGNORE_TEMPLATES.get(template, "")
+        gitignore_path = os.path.join(path, ".gitignore")
+        with open(gitignore_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        self.log_fn(f"已创建 .gitignore（模板：{template}）")
+        return True
+
+    def pull_with_conflict_check(self, path: str, remote: str = "origin", branch: str = "main") -> tuple:
+        ok, out, err = self._run(["pull", remote, branch], cwd=path)
+        output = (out or "") + (err or "")
+        if not ok and "CONFLICT" in output:
+            return False, "检测到冲突，请手动解决"
+        return ok, output
+
+# ──────────────────────────── 主应用 ────────────────────────────
+
+class App:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title(f"{APP_NAME} v{APP_VERSION}")
+        self.root.geometry(WINDOW_SIZE)
+        self.root.minsize(*WINDOW_MIN_SIZE)
+
+        self.cfg = load_config()
+        self.config_mgr = ConfigManager()
+        self.current_profile = self.cfg.get("current_profile", "default")
+        # 启动时立即回写，将旧版明文 token 迁移为加密格式
+        try:
+            save_config(self.cfg, self.current_profile)
+        except Exception:
+            pass
+
+        self.api = None
+        self.user = None
+        self.logger = Logger(ui_callback=None)  # UI回调在_build_ui后设置
+        self.git = GitOps(log_fn=self._log_to_ui)
+        self._repos_cache = self.cfg.get("local_repos", [])
+
+        self.platform = self.cfg.get("platform", "GitHub")
+        self.theme_name = self.cfg.get("theme", "微信(默认)")
+        self.dark_mode = self.cfg.get("dark_mode", False)
+        self.font_size = self.cfg.get("font_size", 9)
+        self.custom_colors = self.cfg.get("custom_colors", CUSTOM_THEME_TEMPLATE.copy())
+        self.proxy = self.cfg.get("proxy", "")
+        self.timeout = self.cfg.get("timeout", HTTP_TIMEOUT)
+
+        self._icon_img = None
+        self._weixin_img = None
+        self._icon_small = None
+        self._weixin_small = None
+        self._load_images()
+        self._apply_theme()
+        self._build_ui()
+
+        # 设置Logger的UI回调
+        self.logger.ui_callback = self._log_to_ui
+
+        self._auto_login()
+        self._check_git()
+
+    def _log_to_ui(self, msg: str) -> None:
+        def _():
+            self.log_box.insert(tk.END, f"{msg}\n")
+            self.log_box.see(tk.END)
+        if threading.current_thread() is threading.main_thread():
+            _()
+        else:
+            self.root.after(0, _)
+
+    def _load_images(self):
+        try:
+            if os.path.exists(ICON_PATH):
+                img = tk.PhotoImage(file=ICON_PATH)
+                self._icon_img = img
+                self._icon_small = img.subsample(max(1, img.width() // ICON_SUBSAMPLE), max(1, img.height() // ICON_SUBSAMPLE))
+        except Exception:
+            pass
+        try:
+            if os.path.exists(WEIXIN_PATH):
+                img = tk.PhotoImage(file=WEIXIN_PATH)
+                self._weixin_img = img
+                self._weixin_small = img.subsample(max(1, img.width() // WEIXIN_SUBSAMPLE), max(1, img.height() // WEIXIN_SUBSAMPLE))
+        except Exception:
+            pass
+
+    def _get_theme(self):
+        if self.theme_name == "自定义":
+            t = self.custom_colors
+            base = t["dark"] if self.dark_mode else t["light"]
+        else:
+            t = THEMES.get(self.theme_name, THEMES["微信(默认)"])
+            base = t["dark"] if self.dark_mode else t["light"]
+        return self._normalize_theme(base)
+
+    def _normalize_theme(self, t: dict) -> dict:
+        result = dict(t)
+        result.setdefault("sidebar_bg",     t.get("bg3", t["bg"]))
+        result.setdefault("sidebar_fg",     t.get("fg2", t["fg"]))
+        result.setdefault("sidebar_active", t.get("accent", "#2563eb"))
+        result.setdefault("card_bg",        t.get("bg2", t["bg"]))
+        result.setdefault("card_border",    t.get("border", "#e0e0e0"))
+        result.setdefault("tooltip_bg",     "#1e293b")
+        result.setdefault("tooltip_fg",     "#f8fafc")
+        result.setdefault("accent_gradient", (t.get("accent", "#2563eb"), t.get("accent", "#7c3aed")))
+        return result
+
+    def _apply_theme(self):
+        t = self._get_theme()
+        self._current_theme = t
+        s = ttk.Style()
+        try:
+            s.theme_use("clam")
+        except Exception:
+            pass
+
+        fs = self.font_size
+        fsb = fs + 1
+        fsh = fs + 4
+
+        s.configure(".", background=t["bg"], foreground=t["fg"], font=("Segoe UI", fs))
+        s.configure("TFrame", background=t["bg"])
+        s.configure("TLabel", background=t["bg"], foreground=t["fg"], font=("Segoe UI", fs))
+        s.configure("TButton", background=t["btn2_bg"], foreground=t["btn2_fg"],
+                     font=("Segoe UI", fs), padding=(12, 6), relief="flat")
+        s.map("TButton",
+               background=[("active", t["accent"]), ("pressed", t["accent_hover"])],
+               foreground=[("active", t["btn_fg"]), ("pressed", t["btn_fg"])])
+
+        s.configure("Accent.TButton", background=t["btn_bg"], foreground=t["btn_fg"],
+                     font=("Segoe UI", fsb, "bold"), padding=(16, 8), relief="flat")
+        s.map("Accent.TButton",
+               background=[("active", t["accent_hover"]), ("pressed", t["accent"])],
+               foreground=[("active", t["btn_fg"])])
+
+        s.configure("Header.TFrame", background=t["header_bg"], padding=8)
+        s.configure("Header.TLabel", background=t["header_bg"], foreground=t["header_fg"],
+                     font=("Segoe UI Semibold", fsh, "bold"))
+        s.configure("Settings.TFrame", background=t["header_bg"])
+        s.configure("Settings.TLabel", background=t["header_bg"], foreground=t["header_fg"],
+                     font=("Segoe UI", fs))
+        s.configure("Theme.TButton", background=t["header_bg"], foreground=t["header_fg"],
+                     font=("Segoe UI", fs), padding=(8, 4), relief="flat")
+        s.map("Theme.TButton",
+               background=[("active", t["accent"])],
+               foreground=[("active", "#ffffff")])
+
+        s.configure("TNotebook", background=t["bg"], padding=4)
+        s.configure("TNotebook.Tab", background=t["tab_bg"], foreground=t["fg2"],
+                     padding=(20, 8), font=("Segoe UI", fs), relief="flat")
+        s.map("TNotebook.Tab",
+               background=[("selected", t["tab_active"])],
+               foreground=[("selected", t["fg"])])
+
+        s.configure("TEntry", fieldbackground=t["entry_bg"], foreground=t["entry_fg"],
+                     insertcolor=t["entry_fg"], font=("Segoe UI", fs), relief="flat", padding=6)
+        s.configure("TCombobox", fieldbackground=t["entry_bg"], foreground=t["entry_fg"],
+                     font=("Segoe UI", fs), relief="flat", padding=6)
+
+        s.configure("TLabelframe", background=t["bg"], foreground=t["fg"],
+                     font=("Segoe UI", fsb), relief="flat", padding=8)
+        s.configure("TLabelframe.Label", background=t["bg"], foreground=t["accent"],
+                     font=("Segoe UI Semibold", fsb, "bold"))
+
+        s.configure("Treeview", background=t["tree_bg"], foreground=t["tree_fg"],
+                     fieldbackground=t["tree_bg"], font=("Segoe UI", fs), relief="flat", rowheight=28)
+        s.configure("Treeview.Heading", background=t["tree_heading_bg"], foreground=t["fg2"],
+                     font=("Segoe UI Semibold", fsb), relief="flat", padding=6)
+        s.map("Treeview",
+               background=[("selected", t["select_bg"])],
+               foreground=[("selected", t["select_fg"])])
+
+        s.configure("TSeparator", background=t["border"])
+        s.configure("TRadiobutton", background=t["bg"], foreground=t["fg"], font=("Segoe UI", fs), padding=4)
+        s.configure("TCheckbutton", background=t["bg"], foreground=t["fg"], font=("Segoe UI", fs), padding=4)
+        s.configure("TScrollbar", background=t["bg3"], troughcolor=t["bg2"], arrowcolor=t["fg2"])
+
+    def _rebuild_theme(self):
+        self._apply_theme()
+        t = self._current_theme
+        self.root.configure(bg=t["bg"])
+        for widget in self.root.winfo_children():
+            widget.destroy()
+        self._build_ui()
+        self._show_tab(self._current_tab or "upload")
+
+
+    def _update_status_bar(self):
+        if hasattr(self, 'status_lbl'):
+            self.status_lbl.config(text=f"v{APP_VERSION} | Author: {APP_AUTHOR} | 当前平台: {self.platform}")
+
+    def _show_loading(self, message="处理中..."):
+        self.log(message)
+        self.root.config(cursor="wait")
+        self.root.update_idletasks()
+
+    def _hide_loading(self):
+        self.root.config(cursor="")
+
+    def _confirm_dialog(self, title, message):
+        return messagebox.askyesno(title, message, icon="warning")
+
+    # ─────────────────── 通用辅助方法 ───────────────────
+
+    def _run_async(self, label: str, fn, on_done=None) -> None:
+        """在后台线程中执行 fn，自动管理 loading 状态和异常捕获。"""
+        self._show_loading(f"正在{label}...")
+        def _task():
+            try:
+                fn()
+            except Exception as e:
+                self.log(f"{label}异常：{e}")
+            finally:
+                if on_done:
+                    self.root.after(0, on_done)
+                self.root.after(0, self._hide_loading)
+        threading.Thread(target=_task, daemon=True).start()
+
+    def _parse_owner_repo(self, var) -> tuple:
+        """验证并拆分 owner/repo 格式的输入，返回 (owner, repo) 或 None。"""
+        text = var.get().strip()
+        is_valid, err = validate_owner_repo(text)
+        if not is_valid:
+            messagebox.showwarning("提示", err)
+            return None
+        return text.split("/", 1)
+
+    def _populate_treeview(self, tree, rows: list) -> None:
+        """清空 Treeview 并填充新数据。"""
+        for item in tree.get_children():
+            tree.delete(item)
+        for row in rows:
+            tree.insert("", tk.END, values=row)
+
+    # ─────────────────── SIDEBAR_ITEMS ───────────────────
+    SIDEBAR_ITEMS = [
+        ("\U0001F4E4", "上传代码", "upload"),
+        ("\U0001F504", "更新推送", "update"),
+        ("\U0001F33F", "分支管理", "branch"),
+        ("\U0001F374", "Fork仓库", "fork"),
+        ("\U0001F4E6", "Release", "release"),
+        ("\U0001F4C1", "我的仓库", "repos"),
+        ("\U0001F50D", "搜索", "search"),
+        ("\U0001F4AC", "Issue", "issues"),
+        ("\U0001F500", "PR", "pulls"),
+        ("\U0001FA9D", "Webhook", "webhook"),
+        ("\U0001F4CA", "统计", "stats"),
+        ("\u2699\uFE0F", "设置", "settings"),
+        ("\u2139\uFE0F", "关于", "about"),
+    ]
+
+    def _build_ui(self):
+        t = self._current_theme
+        self.root.configure(bg=t["bg"])
+
+        if self._icon_img:
+            try:
+                self.root.iconphoto(True, self._icon_img)
+            except Exception:
+                pass
+
+        # 顶部栏
+        hdr_bg = t.get("header_bg", t["bg2"])
+        hdr = tk.Frame(self.root, bg=hdr_bg,
+                       highlightbackground=t["border"], highlightthickness=1)
+        hdr.pack(fill=tk.X, side=tk.TOP)
+
+        self.user_lbl = tk.Label(hdr, text="未登录", bg=hdr_bg,
+                                 fg=t["fg"], font=("Segoe UI", self.font_size))
+        self.user_lbl.pack(side=tk.LEFT, padx=12, pady=6)
+
+        ctrl = tk.Frame(hdr, bg=hdr_bg)
+        ctrl.pack(side=tk.RIGHT, padx=12, pady=6)
+
+        tk.Label(ctrl, text="平台:", bg=hdr_bg,
+                 fg=t["fg2"], font=("Segoe UI", self.font_size)).pack(side=tk.LEFT, padx=(0, 2))
+        self.platform_var = tk.StringVar(value=self.platform)
+        plat_cb = ttk.Combobox(ctrl, textvariable=self.platform_var,
+                               values=list(PLATFORMS.keys()), state="readonly", width=7)
+        plat_cb.pack(side=tk.LEFT, padx=2)
+        plat_cb.bind("<<ComboboxSelected>>", self._on_platform_change)
+
+        tk.Label(ctrl, text="主题:", bg=hdr_bg,
+                 fg=t["fg2"], font=("Segoe UI", self.font_size)).pack(side=tk.LEFT, padx=(8, 2))
+        self.theme_var = tk.StringVar(value=self.theme_name)
+        theme_cb = ttk.Combobox(ctrl, textvariable=self.theme_var,
+                                values=list(THEMES.keys()) + ["自定义"], state="readonly", width=10)
+        theme_cb.pack(side=tk.LEFT, padx=2)
+        theme_cb.bind("<<ComboboxSelected>>", self._on_theme_change)
+
+        tk.Label(ctrl, text="字号:", bg=hdr_bg,
+                 fg=t["fg2"], font=("Segoe UI", self.font_size)).pack(side=tk.LEFT, padx=(8, 2))
+        self.font_var = tk.StringVar(value=str(self.font_size))
+        font_cb = ttk.Combobox(ctrl, textvariable=self.font_var,
+                               values=["8", "9", "10", "11", "12", "13", "14"],
+                               state="readonly", width=3)
+        font_cb.pack(side=tk.LEFT, padx=2)
+        font_cb.bind("<<ComboboxSelected>>", self._on_font_change)
+
+        tk.Label(ctrl, text="深色:", bg=hdr_bg,
+                 fg=t["fg2"], font=("Segoe UI", self.font_size)).pack(side=tk.LEFT, padx=(8, 2))
+        self.dark_var = tk.BooleanVar(value=self.dark_mode)
+        ttk.Checkbutton(ctrl, variable=self.dark_var, command=self._on_dark_toggle).pack(side=tk.LEFT, padx=2)
+
+        sep = tk.Frame(ctrl, width=1, height=20, bg=t["border"])
+        sep.pack(side=tk.LEFT, padx=8, fill=tk.Y)
+        ttk.Button(ctrl, text="Token设置", command=self._token_dlg, style="Theme.TButton").pack(side=tk.LEFT, padx=2)
+        ttk.Button(ctrl, text="刷新", command=self._refresh, style="Theme.TButton").pack(side=tk.LEFT, padx=2)
+
+        # 主体: 侧边栏 + 内容区
+        body = tk.Frame(self.root, bg=t["bg"])
+        body.pack(fill=tk.BOTH, expand=True)
+
+        # 侧边栏
+        sidebar_bg = t.get("sidebar_bg", t["bg3"])
+        self.sidebar = tk.Frame(body, bg=sidebar_bg,
+                                width=SIDEBAR_WIDTH, highlightbackground=t["border"], highlightthickness=1)
+        self.sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        self.sidebar.pack_propagate(False)
+
+        self.sidebar_btns = {}
+        self.sidebar_indicator = None
+        self._tab_frames = {}
+        self._current_tab = None
+        self._build_sidebar()
+
+        # 内容区
+        content_wrap = tk.Frame(body, bg=t["bg"])
+        content_wrap.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.content_frame = tk.Frame(content_wrap, bg=t["bg"])
+        self.content_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+
+        # 构建所有标签页内容
+        self._tab_upload()
+        self._tab_update()
+        self._tab_branch()
+        self._tab_fork()
+        self._tab_release()
+        self._tab_repos()
+        self._tab_search()
+        self._tab_issues()
+        self._tab_pulls()
+        self._tab_webhook()
+        self._tab_stats()
+        self._tab_settings()
+        self._tab_about()
+
+        # 日志面板 (右侧竖向)
+        log_lf = ttk.LabelFrame(body, text=" 操作日志 ", padding=4)
+        log_lf.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 6), pady=6)
+        self.log_box = scrolledtext.ScrolledText(log_lf, wrap=tk.WORD,
+                                                 font=("Consolas", self.font_size),
+                                                 relief=tk.FLAT,
+                                                 bg=t["log_bg"], fg=t["log_fg"],
+                                                 insertbackground=t["log_fg"],
+                                                 selectbackground=t["select_bg"],
+                                                 highlightthickness=0, bd=0,
+                                                 width=30)
+        self.log_box.pack(fill=tk.BOTH, expand=True)
+        ttk.Button(log_lf, text="清空",
+                   command=lambda: self.log_box.delete("1.0", tk.END)).pack(anchor=tk.E, pady=(4, 0))
+
+        # 底部状态栏
+        status_bg = t.get("card_bg", t["bg2"])
+        status_bar = tk.Frame(self.root, bg=status_bg,
+                              highlightbackground=t["border"], highlightthickness=1)
+        status_bar.pack(fill=tk.X, side=tk.BOTTOM)
+        self.status_lbl = tk.Label(status_bar,
+                                   text=f"v{APP_VERSION} | Author: {APP_AUTHOR} | 当前平台: {self.platform}",
+                                   bg=status_bg, fg=t["fg3"],
+                                   font=("Segoe UI", 8), pady=2)
+        self.status_lbl.pack(side=tk.RIGHT, padx=10)
+
+        # 默认显示第一个tab
+        self._show_tab("upload")
+
+    def _build_sidebar(self):
+        t = self._current_theme
+        sidebar_bg = t.get("sidebar_bg", t["bg3"])
+        accent = t.get("accent", "#2563eb")
+
+        # Logo 区域
+        logo_frame = tk.Frame(self.sidebar, bg=sidebar_bg, height=44)
+        logo_frame.pack(fill=tk.X)
+        logo_frame.pack_propagate(False)
+
+        tk.Label(logo_frame, text="Code Manager",
+                 bg=sidebar_bg, fg=t["fg"],
+                 font=("Segoe UI Semibold", self.font_size + 1, "bold")).pack(pady=10)
+
+        # 分隔线
+        tk.Frame(self.sidebar, bg=t["border"], height=1).pack(fill=tk.X, padx=12, pady=(4, 4))
+
+        # 导航项
+        nav_frame = tk.Frame(self.sidebar, bg=sidebar_bg)
+        nav_frame.pack(fill=tk.BOTH, expand=True)
+
+        for emoji_icon, label, tab_id in self.SIDEBAR_ITEMS:
+            btn_frame = tk.Frame(nav_frame, bg=sidebar_bg, cursor="hand2", height=36)
+            btn_frame.pack(fill=tk.X, padx=6, pady=1)
+            btn_frame.pack_propagate(False)
+
+            indicator = tk.Frame(btn_frame, bg=sidebar_bg, width=3)
+            indicator.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 0))
+
+            emoji_lbl = tk.Label(btn_frame, text=emoji_icon, bg=sidebar_bg,
+                                 fg=t["fg2"], font=("Segoe UI", self.font_size + 2),
+                                 width=3, anchor="center")
+            emoji_lbl.pack(side=tk.LEFT, padx=(2, 0))
+
+            text_lbl = tk.Label(btn_frame, text=label, bg=sidebar_bg,
+                                fg=t["fg2"], font=("Segoe UI", self.font_size),
+                                anchor="w")
+            text_lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(4, 8))
+
+            self.sidebar_btns[tab_id] = {
+                "frame": btn_frame,
+                "indicator": indicator,
+                "emoji": emoji_lbl,
+                "text": text_lbl,
+            }
+
+            for w in (btn_frame, indicator, emoji_lbl, text_lbl):
+                w.bind("<Button-1>", lambda e, tid=tab_id: self._show_tab(tid))
+                w.bind("<Enter>", lambda e, tid=tab_id: self._on_sidebar_hover(tid, True))
+                w.bind("<Leave>", lambda e, tid=tab_id: self._on_sidebar_hover(tid, False))
+
+        # 底部 spacer
+        tk.Frame(nav_frame, bg=sidebar_bg).pack(fill=tk.BOTH, expand=True)
+
+    def _on_sidebar_hover(self, tab_id, entering):
+        t = self._current_theme
+        sidebar_bg = t.get("sidebar_bg", t["bg3"])
+
+        btn = self.sidebar_btns.get(tab_id)
+        if not btn:
+            return
+
+        current_tab = getattr(self, '_current_tab', None)
+        if current_tab == tab_id:
+            return
+
+        if entering:
+            hover_bg = t.get("bg3", sidebar_bg)
+            btn["frame"].configure(bg=hover_bg)
+            btn["indicator"].configure(bg=hover_bg)
+            btn["emoji"].configure(bg=hover_bg, fg=t["fg"])
+            btn["text"].configure(bg=hover_bg, fg=t["fg"])
+        else:
+            btn["frame"].configure(bg=sidebar_bg)
+            btn["indicator"].configure(bg=sidebar_bg)
+            btn["emoji"].configure(bg=sidebar_bg, fg=t["fg2"])
+            btn["text"].configure(bg=sidebar_bg, fg=t["fg2"])
+
+    def _show_tab(self, tab_id):
+        for tid, frame in self._tab_frames.items():
+            frame.pack_forget()
+        if tab_id in self._tab_frames:
+            self._tab_frames[tab_id].pack(in_=self.content_frame, fill=tk.BOTH, expand=True)
+        self._update_sidebar_active(tab_id)
+        self._current_tab = tab_id
+
+    def _update_sidebar_active(self, tab_id):
+        t = self._current_theme
+        sidebar_bg = t.get("sidebar_bg", t["bg3"])
+        sidebar_active_bg = t.get("accent", "#2563eb")
+
+        for tid, btn in self.sidebar_btns.items():
+            if tid == tab_id:
+                btn["frame"].configure(bg=sidebar_active_bg)
+                btn["indicator"].configure(bg="#ffffff")
+                btn["emoji"].configure(bg=sidebar_active_bg, fg="#ffffff")
+                btn["text"].configure(bg=sidebar_active_bg, fg="#ffffff")
+            else:
+                btn["frame"].configure(bg=sidebar_bg)
+                btn["indicator"].configure(bg=sidebar_bg)
+                btn["emoji"].configure(bg=sidebar_bg, fg=t["fg2"])
+                btn["text"].configure(bg=sidebar_bg, fg=t["fg2"])
+
+    def _card_frame(self, parent, title=None, **kwargs):
+        t = self._current_theme
+        card = tk.Frame(parent, bg=t.get("card_bg", t["bg2"]),
+                        highlightbackground=t.get("card_border", t["border"]),
+                        highlightthickness=1, padx=16, pady=12, **kwargs)
+        if title:
+            ttk.Label(card, text=title,
+                      font=("Segoe UI Semibold", self.font_size + 1, "bold"),
+                      foreground=t["accent"]).pack(anchor=tk.W, pady=(0, 8))
+        return card
+
+    def _make_desc(self, parent, text, row=0, col=0, colspan=3):
+        t = self._current_theme
+        ttk.Label(parent, text=text, wraplength=580, justify=tk.LEFT,
+                  foreground=t["fg2"], font=("Segoe UI", self.font_size)
+                  ).grid(row=row, column=col, columnspan=colspan, sticky=tk.W, padx=8, pady=(0, 12))
+
+    def _section_label(self, parent, text, row, col=0, colspan=3):
+        t = self._current_theme
+        ttk.Label(parent, text=text, font=("Segoe UI Semibold", self.font_size + 1, "bold"),
+                  foreground=t["accent"]).grid(row=row, column=col, columnspan=colspan, sticky=tk.W, pady=(16, 8))
+
+    # ─────────────────── 标签页：上传 ───────────────────
+
+    def _tab_upload(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["upload"] = f
+
+        self._make_desc(f,
+            "功能说明：将本地项目文件夹上传到GitHub/Gitee。自动创建新仓库，初始化Git，"
+            "关联远程地址，提交所有文件并推送。首次上传时可选择开源协议（如MIT、Apache等）。", 0)
+
+        r = 1
+        ttk.Label(f, text="本地项目路径：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        pf = ttk.Frame(f)
+        pf.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        self.up_path = tk.StringVar()
+        ttk.Entry(pf, textvariable=self.up_path).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pf, text="浏览…", width=7,
+                   command=lambda: self._browse(self.up_path, auto_name=self.up_name)).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Label(f, text="仓库名称：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_name = tk.StringVar()
+        ttk.Entry(f, textvariable=self.up_name).grid(row=r, column=1, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="仓库描述：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_desc = tk.StringVar()
+        ttk.Entry(f, textvariable=self.up_desc).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="可见性：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_priv = tk.BooleanVar(value=False)
+        vf = ttk.Frame(f)
+        vf.grid(row=r, column=1, sticky=tk.W, pady=4)
+        ttk.Radiobutton(vf, text="公开 Public", variable=self.up_priv, value=False).pack(side=tk.LEFT)
+        ttk.Radiobutton(vf, text="私有 Private", variable=self.up_priv, value=True).pack(side=tk.LEFT, padx=12)
+
+        r += 1
+        ttk.Label(f, text="开源协议：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_license = tk.StringVar(value="MIT License (MIT)")
+        lc = ttk.Combobox(f, textvariable=self.up_license, values=list(LICENSES.keys()),
+                          state="readonly", width=32)
+        lc.grid(row=r, column=1, sticky=tk.W, pady=4)
+        lc.bind("<<ComboboxSelected>>", self._license_hint)
+
+        r += 1
+        t = self._current_theme
+        self.license_hint_lbl = ttk.Label(f, text="", foreground=t["fg2"],
+                                           font=("Segoe UI", self.font_size - 1), wraplength=500)
+        self.license_hint_lbl.grid(row=r, column=1, columnspan=2, sticky=tk.W)
+
+        r += 1
+        ttk.Label(f, text="主分支名：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_branch = tk.StringVar(value="main")
+        ttk.Entry(f, textvariable=self.up_branch, width=16).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        ttk.Label(f, text="提交信息：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_msg = tk.StringVar(value="Initial commit")
+        ttk.Entry(f, textvariable=self.up_msg).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text=".gitignore模板：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.up_gitignore = tk.StringVar(value="通用")
+        gi_cb = ttk.Combobox(f, textvariable=self.up_gitignore,
+                              values=list(GITIGNORE_TEMPLATES.keys()), state="readonly", width=10)
+        gi_cb.grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=14)
+        ttk.Button(bf, text="创建仓库并上传", style="Accent.TButton", command=self._do_upload).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bf, text="仅创建远程仓库", command=self._do_create_repo).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bf, text="批量上传", command=self._batch_upload).pack(side=tk.LEFT, padx=6)
+
+        f.columnconfigure(1, weight=1)
+        self._license_hint()
+
+    def _license_hint(self, event=None):
+        key = LICENSES.get(self.up_license.get(), "")
+        desc = LICENSE_DESC.get(key, "")
+        self.license_hint_lbl.config(text=desc)
+
+    # ─────────────────── 标签页：更新 ───────────────────
+
+    def _tab_update(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["update"] = f
+
+        self._make_desc(f,
+            "功能说明：对已关联远程仓库的本地项目进行日常更新。可以将本地修改提交并推送到远程仓库，"
+            "也可以从远程拉取最新代码。如果目录还不是Git仓库，可以点击初始化Git按钮。", 0)
+
+        r = 1
+        ttk.Label(f, text="本地项目路径：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        pf = ttk.Frame(f)
+        pf.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        self.ud_path = tk.StringVar()
+        ttk.Entry(pf, textvariable=self.ud_path).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pf, text="浏览…", width=7, command=lambda: self._browse(self.ud_path)).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Label(f, text="提交信息：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.ud_msg = tk.StringVar(value="Update")
+        ttk.Entry(f, textvariable=self.ud_msg).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="远程分支：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.ud_branch = tk.StringVar(value="main")
+        ttk.Entry(f, textvariable=self.ud_branch, width=16).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "初始化与关联（首次使用）", r)
+        r += 1
+        ttk.Label(f, text="远程仓库地址：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.ud_remote_url = tk.StringVar()
+        ttk.Entry(f, textvariable=self.ud_remote_url).grid(row=r, column=1, sticky=tk.EW, pady=4)
+        t = self._current_theme
+        ttk.Label(f, text="格式：https://github.com/用户名/仓库名.git", foreground=t["fg3"],
+                  font=("Segoe UI", self.font_size - 1)).grid(row=r, column=2, sticky=tk.W, padx=4)
+
+        r += 1
+        ibf = ttk.Frame(f)
+        ibf.grid(row=r, column=0, columnspan=3, sticky=tk.W, pady=4)
+        ttk.Button(ibf, text="初始化Git", command=self._init_git).pack(side=tk.LEFT, padx=4)
+        ttk.Button(ibf, text="关联远程仓库", command=self._set_remote).pack(side=tk.LEFT, padx=4)
+        ttk.Button(ibf, text="初始化并关联（一键）", style="Accent.TButton", command=self._init_and_set_remote).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        self._section_label(f, "提交与推送", r)
+        r += 1
+        self.ud_force = tk.BooleanVar(value=False)
+        ttk.Checkbutton(f, text="强制推送（覆盖远程历史，慎用）", variable=self.ud_force).grid(
+            row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=10)
+        ttk.Button(bf, text="提交并推送", style="Accent.TButton", command=self._do_commit_push).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="仅提交", command=self._do_commit).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="仅推送", command=self._do_push).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="拉取远程", command=self._do_pull).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=8)
+        r += 1
+        self._section_label(f, "工作区状态", r)
+        r += 1
+        t = self._current_theme
+        self.ud_status = scrolledtext.ScrolledText(f, height=7, wrap=tk.WORD, font=("Consolas", self.font_size),
+                                                    relief=tk.FLAT, bg=t["log_bg"], fg=t["log_fg"],
+                                                    insertbackground=t["log_fg"], selectbackground=t["select_bg"],
+                                                    highlightthickness=0, bd=0)
+        self.ud_status.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        r += 1
+        ttk.Button(f, text="刷新状态", command=self._refresh_status).grid(row=r, column=0, sticky=tk.W, pady=4)
+        f.columnconfigure(1, weight=1)
+
+    # ─────────────────── 标签页：分支 ───────────────────
+
+    def _tab_branch(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["branch"] = f
+
+        self._make_desc(f,
+            "功能说明：管理Git分支。分支用于在不影响主线代码的情况下进行开发、测试或修复。"
+            "可以从远程加载分支列表，创建新的本地/远程分支，切换当前分支，或删除不再需要的远程分支。", 0)
+
+        r = 1
+        ttk.Label(f, text="本地项目路径：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        pf = ttk.Frame(f)
+        pf.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        self.br_path = tk.StringVar()
+        ttk.Entry(pf, textvariable=self.br_path).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pf, text="浏览…", width=7, command=lambda: self._browse(self.br_path)).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Label(f, text="仓库地址 (owner/repo)：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.br_repo = tk.StringVar()
+        ttk.Entry(f, textvariable=self.br_repo, width=28).grid(row=r, column=1, sticky=tk.EW, pady=4)
+        ttk.Button(f, text="加载分支", command=self._load_branches).grid(row=r, column=2, padx=4, pady=4)
+
+        r += 1
+        self._section_label(f, "分支列表", r)
+        r += 1
+        lf = ttk.Frame(f)
+        lf.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        t = self._current_theme
+        self.br_list = tk.Listbox(lf, height=7, font=("Consolas", self.font_size), relief=tk.FLAT,
+                                   bg=t["tree_bg"], fg=t["tree_fg"],
+                                   selectbackground=t["select_bg"], selectforeground=t["select_fg"],
+                                   highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(lf, orient=tk.VERTICAL, command=self.br_list.yview)
+        self.br_list.configure(yscrollcommand=sb.set)
+        self.br_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        r += 1
+        ttk.Label(f, text="新分支名：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.br_new = tk.StringVar()
+        ttk.Entry(f, textvariable=self.br_new, width=22).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        ttk.Label(f, text="基于分支：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.br_base = tk.StringVar(value="main")
+        ttk.Entry(f, textvariable=self.br_base, width=16).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=10)
+        ttk.Button(bf, text="创建本地分支", command=self._br_local).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="创建远程分支", command=self._br_remote).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="切换到选中", command=self._br_switch).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="删除选中远程分支", command=self._br_delete).pack(side=tk.LEFT, padx=4)
+        f.columnconfigure(1, weight=1)
+
+    # ─────────────────── 标签页：Fork ───────────────────
+
+    def _tab_fork(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["fork"] = f
+
+        self._make_desc(f,
+            "功能说明：Fork（派生）他人的仓库到你自己的账号下。Fork后你会获得一份独立副本，"
+            "可以在自己的副本上自由修改而不影响原仓库。常用于参与开源项目：Fork → 修改 → 提交PR。", 0)
+
+        r = 1
+        ttk.Label(f, text="目标仓库：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.fk_repo = tk.StringVar()
+        ttk.Entry(f, textvariable=self.fk_repo, width=36).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        t = self._current_theme
+        ttk.Label(f, text="格式：用户名/仓库名", foreground=t["fg3"],
+                  font=("Segoe UI", self.font_size - 1)).grid(row=r, column=3, sticky=tk.W, padx=4)
+
+        r += 1
+        ttk.Label(f, text="克隆到本地：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        pf = ttk.Frame(f)
+        pf.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        self.fk_local = tk.StringVar()
+        ttk.Entry(pf, textvariable=self.fk_local).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(pf, text="浏览…", width=7, command=lambda: self._browse_dir(self.fk_local)).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        self.fk_auto = tk.BooleanVar(value=True)
+        ttk.Checkbutton(f, text="Fork后自动克隆到本地", variable=self.fk_auto).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=4, pady=10)
+        ttk.Button(bf, text="Fork仓库", style="Accent.TButton", command=self._do_fork).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bf, text="仅克隆（已有Fork）", command=self._do_clone).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bf, text="批量Fork", command=self._batch_fork).pack(side=tk.LEFT, padx=6)
+
+        r += 1
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=r, column=0, columnspan=4, sticky=tk.EW, pady=8)
+        r += 1
+        self._section_label(f, "从仓库列表快速Fork", r)
+        r += 1
+        flf = ttk.Frame(f)
+        flf.grid(row=r, column=0, columnspan=4, sticky=tk.EW, pady=4)
+        self.fk_list = tk.Listbox(flf, height=8, font=("Consolas", self.font_size), relief=tk.FLAT,
+                                   bg=t["tree_bg"], fg=t["tree_fg"],
+                                   selectbackground=t["select_bg"], selectforeground=t["select_fg"],
+                                   highlightthickness=0, bd=0)
+        fsb = ttk.Scrollbar(flf, orient=tk.VERTICAL, command=self.fk_list.yview)
+        self.fk_list.configure(yscrollcommand=fsb.set)
+        self.fk_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        fsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        r += 1
+        bf2 = ttk.Frame(f)
+        bf2.grid(row=r, column=0, columnspan=4, pady=4)
+        ttk.Button(bf2, text="刷新列表", command=self._fk_load).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf2, text="Fork选中项", command=self._fk_selected).pack(side=tk.LEFT, padx=4)
+        f.columnconfigure(1, weight=1)
+
+    # ─────────────────── 标签页：Release ───────────────────
+
+    def _tab_release(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["release"] = f
+
+        self._make_desc(f,
+            "功能说明：创建Release（发布版本），可将源代码打包或上传编译好的软件/文件作为附件。"
+            "适用于正式发布版本、提供下载包、记录版本更新日志等场景。"
+            "注意：Gitee个人免费版不支持Release API，此功能仅限GitHub。", 0)
+
+        r = 1
+        ttk.Label(f, text="仓库地址 (owner/repo)：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.rl_repo = tk.StringVar()
+        ttk.Entry(f, textvariable=self.rl_repo, width=36).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="Tag 名称：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.rl_tag = tk.StringVar(value="v1.0.0")
+        ttk.Entry(f, textvariable=self.rl_tag, width=20).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        ttk.Label(f, text="Release 标题：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.rl_title = tk.StringVar()
+        ttk.Entry(f, textvariable=self.rl_title).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="更新说明：").grid(row=r, column=0, sticky=tk.NW, pady=4)
+        t = self._current_theme
+        self.rl_body = scrolledtext.ScrolledText(f, height=5, wrap=tk.WORD, font=("Segoe UI", self.font_size),
+                                                  bg=t["entry_bg"], fg=t["entry_fg"],
+                                                  insertbackground=t["entry_fg"], highlightthickness=0, bd=1, relief="solid")
+        self.rl_body.grid(row=r, column=1, columnspan=3, sticky=tk.EW, pady=4)
+        self.rl_body.insert("1.0", "## 更新内容\n\n- ")
+
+        r += 1
+        self.rl_draft = tk.BooleanVar(value=False)
+        self.rl_pre = tk.BooleanVar(value=False)
+        df = ttk.Frame(f)
+        df.grid(row=r, column=1, sticky=tk.W, pady=4)
+        ttk.Checkbutton(df, text="草稿 (Draft)", variable=self.rl_draft).pack(side=tk.LEFT)
+        ttk.Checkbutton(df, text="预发布 (Pre-release)", variable=self.rl_pre).pack(side=tk.LEFT, padx=12)
+
+        r += 1
+        self._section_label(f, "附件上传（可选）", r)
+        r += 1
+        af = ttk.Frame(f)
+        af.grid(row=r, column=0, columnspan=4, sticky=tk.EW, pady=4)
+        self.rl_assets_var = tk.StringVar(value="")
+        ttk.Entry(af, textvariable=self.rl_assets_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(af, text="选择文件…", width=9, command=self._browse_assets).pack(side=tk.LEFT, padx=4)
+        ttk.Button(af, text="清空", width=5, command=lambda: self.rl_assets_var.set("")).pack(side=tk.LEFT, padx=2)
+
+        r += 1
+        ttk.Label(f, text="支持多文件，用分号 ; 分隔路径", foreground=t["fg3"],
+                  font=("Segoe UI", self.font_size - 1)).grid(row=r, column=1, sticky=tk.W)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=4, pady=14)
+        ttk.Button(bf, text="创建 Release", style="Accent.TButton", command=self._do_release).pack(side=tk.LEFT, padx=6)
+        ttk.Button(bf, text="查看已有 Release", command=self._list_releases).pack(side=tk.LEFT, padx=6)
+
+        r += 1
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=r, column=0, columnspan=4, sticky=tk.EW, pady=8)
+        r += 1
+        self._section_label(f, "已有 Release 列表", r)
+        r += 1
+        cols = ("Tag", "标题", "状态", "创建时间")
+        self.rl_tree = ttk.Treeview(f, columns=cols, show="headings", height=8)
+        for c in cols:
+            self.rl_tree.heading(c, text=c)
+        self.rl_tree.column("Tag", width=100)
+        self.rl_tree.column("标题", width=200)
+        self.rl_tree.column("状态", width=80, anchor=tk.CENTER)
+        self.rl_tree.column("创建时间", width=120, anchor=tk.CENTER)
+        self.rl_tree.grid(row=r, column=0, columnspan=4, sticky=tk.EW, pady=4)
+        rsb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self.rl_tree.yview)
+        self.rl_tree.configure(yscrollcommand=rsb.set)
+        rsb.grid(row=r, column=4, sticky=tk.NS, pady=4)
+        f.columnconfigure(1, weight=1)
+
+    # ─────────────────── 标签页：我的仓库 ───────────────────
+
+    def _tab_repos(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["repos"] = f
+
+        self._make_desc(f,
+            "功能说明：查看你账号下的所有仓库信息，包括名称、可见性、使用的开源协议、"
+            "编程语言和最后更新时间。双击仓库可在浏览器中打开对应页面。", 0)
+
+        r = 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, sticky=tk.W, pady=4)
+        ttk.Button(bf, text="刷新列表", command=self._repos_load).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="浏览器中打开选中仓库", command=self._repos_open).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="导出仓库列表", command=self._export_repos).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        cols = ("仓库名称", "可见性", "开源协议", "语言", "最后更新")
+        self.repo_tree = ttk.Treeview(f, columns=cols, show="headings", height=16)
+        for c in cols:
+            self.repo_tree.heading(c, text=c)
+        self.repo_tree.column("仓库名称", width=220)
+        self.repo_tree.column("可见性", width=60, anchor=tk.CENTER)
+        self.repo_tree.column("开源协议", width=100, anchor=tk.CENTER)
+        self.repo_tree.column("语言", width=80, anchor=tk.CENTER)
+        self.repo_tree.column("最后更新", width=110, anchor=tk.CENTER)
+        self.repo_tree.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        rsb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self.repo_tree.yview)
+        self.repo_tree.configure(yscrollcommand=rsb.set)
+        rsb.grid(row=r, column=3, sticky=tk.NS, pady=4)
+        self.repo_tree.bind("<Double-1>", lambda e: self._repos_open())
+        f.columnconfigure(0, weight=1)
+
+    # ─────────────────── 标签页：搜索 ───────────────────
+
+    def _tab_search(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["search"] = f
+
+        self._make_desc(f,
+            "功能说明：搜索GitHub/Gitee上的开源仓库。可以根据关键词和编程语言筛选，"
+            "查看仓库的Star数、Fork数等信息，并快速Fork或克隆感兴趣的仓库。", 0)
+
+        r = 1
+        ttk.Label(f, text="搜索关键词：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        sf = ttk.Frame(f)
+        sf.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+        self.sr_query = tk.StringVar()
+        ttk.Entry(sf, textvariable=self.sr_query).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(sf, text="搜索", command=self._search_repos).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Label(f, text="编程语言：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.sr_lang = tk.StringVar(value="全部")
+        lang_cb = ttk.Combobox(f, textvariable=self.sr_lang,
+                                values=["全部", "Python", "JavaScript", "Java", "C++", "Go", "Rust", "TypeScript"],
+                                state="readonly", width=15)
+        lang_cb.grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "搜索结果", r)
+        r += 1
+        cols = ("仓库名称", "Star", "Fork", "语言", "描述")
+        self.sr_tree = ttk.Treeview(f, columns=cols, show="headings", height=12)
+        for c in cols:
+            self.sr_tree.heading(c, text=c)
+        self.sr_tree.column("仓库名称", width=200)
+        self.sr_tree.column("Star", width=80, anchor=tk.CENTER)
+        self.sr_tree.column("Fork", width=80, anchor=tk.CENTER)
+        self.sr_tree.column("语言", width=80, anchor=tk.CENTER)
+        self.sr_tree.column("描述", width=300)
+        self.sr_tree.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        ssb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self.sr_tree.yview)
+        self.sr_tree.configure(yscrollcommand=ssb.set)
+        ssb.grid(row=r, column=3, sticky=tk.NS, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=10)
+        ttk.Button(bf, text="Fork选中", command=self._sr_fork).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="克隆选中", command=self._sr_clone).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="在浏览器中打开", command=self._sr_open).pack(side=tk.LEFT, padx=4)
+        f.columnconfigure(1, weight=1)
+
+    def _search_repos(self):
+        if not self._need_auth():
+            return
+        query = self.sr_query.get().strip()
+        if not query:
+            messagebox.showwarning("提示", "请输入搜索关键词")
+            return
+        
+        lang = self.sr_lang.get()
+        if lang != "全部":
+            query = f"{query} language:{lang}"
+        
+        def _work():
+            try:
+                repos = self.api.search_repos(query)
+                rows = [(r.get("full_name", ""), r.get("stargazers_count", 0),
+                         r.get("forks_count", 0), r.get("language", "") or "",
+                         (r.get("description", "") or "")[:50]) for r in repos]
+                self.root.after(0, lambda: self._populate_treeview(self.sr_tree, rows))
+                self.logger.add_history("搜索", f"关键词：{query}", self.platform)
+                self.log(f"搜索到 {len(repos)} 个仓库")
+            except Exception as e:
+                self.log(f"搜索失败：{e}")
+        self._run_async("搜索", _work)
+
+    def _sr_fork(self):
+        sel = self.sr_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个仓库")
+            return
+        name = self.sr_tree.item(sel[0], "values")[0]
+        self.fk_repo.set(name)
+        self._show_tab("fork")
+        self._do_fork()
+
+    def _sr_clone(self):
+        sel = self.sr_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个仓库")
+            return
+        name = self.sr_tree.item(sel[0], "values")[0]
+        self.fk_repo.set(name)
+        self._show_tab("fork")
+
+    def _sr_open(self):
+        sel = self.sr_tree.selection()
+        if not sel:
+            return
+        name = self.sr_tree.item(sel[0], "values")[0]
+        webbrowser.open(f"{PLATFORMS[self.platform]['web']}/{name}")
+
+    # ─────────────────── 标签页：Issue管理 ───────────────────
+
+    def _tab_issues(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["issues"] = f
+
+        self._make_desc(f,
+            "功能说明：管理仓库的Issue（问题/任务）。可以查看、创建、关闭Issue，"
+            "适用于项目管理、Bug追踪、功能需求等场景。", 0)
+
+        r = 1
+        ttk.Label(f, text="仓库 (owner/repo)：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.is_repo_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.is_repo_var, width=28).grid(row=r, column=1, sticky=tk.EW, pady=4)
+        ttk.Button(f, text="加载", command=self._load_issues).grid(row=r, column=2, padx=4, pady=4)
+
+        r += 1
+        ttk.Label(f, text="状态：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.is_state = tk.StringVar(value="open")
+        ttk.Combobox(f, textvariable=self.is_state, values=["open", "closed", "all"],
+                      state="readonly", width=10).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "Issue列表", r)
+        r += 1
+        cols = ("编号", "标题", "状态", "创建时间")
+        self.is_tree = ttk.Treeview(f, columns=cols, show="headings", height=8)
+        for c in cols:
+            self.is_tree.heading(c, text=c)
+        self.is_tree.column("编号", width=60, anchor=tk.CENTER)
+        self.is_tree.column("标题", width=300)
+        self.is_tree.column("状态", width=80, anchor=tk.CENTER)
+        self.is_tree.column("创建时间", width=120, anchor=tk.CENTER)
+        self.is_tree.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        isb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self.is_tree.yview)
+        self.is_tree.configure(yscrollcommand=isb.set)
+        isb.grid(row=r, column=3, sticky=tk.NS, pady=4)
+
+        r += 1
+        self._section_label(f, "创建新Issue", r)
+        r += 1
+        ttk.Label(f, text="标题：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.is_title = tk.StringVar()
+        ttk.Entry(f, textvariable=self.is_title).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="内容：").grid(row=r, column=0, sticky=tk.NW, pady=4)
+        t = self._current_theme
+        self.is_body = scrolledtext.ScrolledText(f, height=4, wrap=tk.WORD, font=("Segoe UI", self.font_size),
+                                                  bg=t["entry_bg"], fg=t["entry_fg"],
+                                                  insertbackground=t["entry_fg"], highlightthickness=0, bd=1, relief="solid")
+        self.is_body.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="标签（逗号分隔）：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.is_labels = tk.StringVar()
+        ttk.Entry(f, textvariable=self.is_labels).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=10)
+        ttk.Button(bf, text="创建Issue", style="Accent.TButton", command=self._create_issue).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="关闭选中Issue", command=self._close_issue).pack(side=tk.LEFT, padx=4)
+        f.columnconfigure(1, weight=1)
+
+    def _load_issues(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.is_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        state = self.is_state.get()
+        
+        def _work():
+            try:
+                issues = self.api.list_issues(owner, repo, state=state)
+                rows = [(issue.get("number", ""), issue.get("title", ""),
+                         issue.get("state", ""), (issue.get("created_at", ""))[:10]) for issue in issues]
+                self.root.after(0, lambda: self._populate_treeview(self.is_tree, rows))
+                self.log(f"加载了 {len(issues)} 个Issue")
+            except Exception as e:
+                self.log(f"加载Issue失败：{e}")
+        self._run_async("加载Issue列表", _work)
+
+    def _create_issue(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.is_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        rp = f"{owner}/{repo}"
+        title = self.is_title.get().strip()
+        if not title:
+            messagebox.showwarning("提示", "请输入Issue标题")
+            return
+        
+        body = self.is_body.get("1.0", tk.END).strip()
+        labels = [l.strip() for l in self.is_labels.get().split(",") if l.strip()]
+
+        def _work():
+            resp = self.api.create_issue(owner, repo, title, body, labels if labels else None)
+            if resp.status_code == 201:
+                rd = resp.json()
+                self.log(f"Issue创建成功：{rd.get('html_url', '')}")
+                self.logger.add_history("创建Issue", f"{rp}#{rd.get('number', '')}", self.platform, rp)
+            else:
+                self.log(f"创建失败：{resp.status_code}")
+        self._run_async("创建Issue", _work, on_done=self._load_issues)
+
+    def _close_issue(self):
+        if not self._need_auth():
+            return
+        sel = self.is_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个Issue")
+            return
+        parsed = self._parse_owner_repo(self.is_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        issue_num = self.is_tree.item(sel[0], "values")[0]
+        if not self._confirm_dialog("确认关闭", f"确定要关闭Issue #{issue_num}吗？"):
+            return
+        
+        def _work():
+            resp = self.api.close_issue(owner, repo, issue_num)
+            if resp.status_code == 200:
+                self.log(f"Issue #{issue_num} 已关闭")
+            else:
+                self.log(f"关闭失败：{resp.status_code}")
+        self._run_async("关闭Issue", _work, on_done=self._load_issues)
+
+    # ─────────────────── 标签页：PR管理 ───────────────────
+
+    def _tab_pulls(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["pulls"] = f
+
+        self._make_desc(f,
+            "功能说明：管理仓库的Pull Request（拉取请求）。可以查看、创建、合并、关闭PR，"
+            "适用于代码审查、协作开发等场景。", 0)
+
+        r = 1
+        ttk.Label(f, text="仓库 (owner/repo)：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.pr_repo_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.pr_repo_var, width=28).grid(row=r, column=1, sticky=tk.EW, pady=4)
+        ttk.Button(f, text="加载", command=self._load_pulls).grid(row=r, column=2, padx=4, pady=4)
+
+        r += 1
+        ttk.Label(f, text="状态：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.pr_state = tk.StringVar(value="open")
+        ttk.Combobox(f, textvariable=self.pr_state, values=["open", "closed", "all"],
+                      state="readonly", width=10).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "PR列表", r)
+        r += 1
+        cols = ("编号", "标题", "状态", "分支")
+        self.pr_tree = ttk.Treeview(f, columns=cols, show="headings", height=8)
+        for c in cols:
+            self.pr_tree.heading(c, text=c)
+        self.pr_tree.column("编号", width=60, anchor=tk.CENTER)
+        self.pr_tree.column("标题", width=250)
+        self.pr_tree.column("状态", width=80, anchor=tk.CENTER)
+        self.pr_tree.column("分支", width=200)
+        self.pr_tree.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        psb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self.pr_tree.yview)
+        self.pr_tree.configure(yscrollcommand=psb.set)
+        psb.grid(row=r, column=3, sticky=tk.NS, pady=4)
+
+        r += 1
+        self._section_label(f, "创建新PR", r)
+        r += 1
+        ttk.Label(f, text="标题：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.pr_title = tk.StringVar()
+        ttk.Entry(f, textvariable=self.pr_title).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="源分支：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.pr_head = tk.StringVar()
+        ttk.Entry(f, textvariable=self.pr_head, width=20).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        ttk.Label(f, text="目标分支：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.pr_base = tk.StringVar(value="main")
+        ttk.Entry(f, textvariable=self.pr_base, width=20).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        ttk.Label(f, text="内容：").grid(row=r, column=0, sticky=tk.NW, pady=4)
+        t = self._current_theme
+        self.pr_body = scrolledtext.ScrolledText(f, height=4, wrap=tk.WORD, font=("Segoe UI", self.font_size),
+                                                  bg=t["entry_bg"], fg=t["entry_fg"],
+                                                  insertbackground=t["entry_fg"], highlightthickness=0, bd=1, relief="solid")
+        self.pr_body.grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=10)
+        ttk.Button(bf, text="创建PR", style="Accent.TButton", command=self._create_pull).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="合并选中PR", command=self._merge_pull).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="关闭选中PR", command=self._close_pull).pack(side=tk.LEFT, padx=4)
+        f.columnconfigure(1, weight=1)
+
+    def _load_pulls(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.pr_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        state = self.pr_state.get()
+        
+        def _work():
+            try:
+                pulls = self.api.list_pulls(owner, repo, state=state)
+                rows = [(pr.get("number", ""), pr.get("title", ""), pr.get("state", ""),
+                         f"{pr.get('head', {}).get('ref', '')} → {pr.get('base', {}).get('ref', '')}") for pr in pulls]
+                self.root.after(0, lambda: self._populate_treeview(self.pr_tree, rows))
+                self.log(f"加载了 {len(pulls)} 个PR")
+            except Exception as e:
+                self.log(f"加载PR失败：{e}")
+        self._run_async("加载PR列表", _work)
+
+    def _create_pull(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.pr_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        rp = f"{owner}/{repo}"
+        title = self.pr_title.get().strip()
+        head = self.pr_head.get().strip()
+        if not title or not head:
+            messagebox.showwarning("提示", "请输入PR标题和源分支")
+            return
+        
+        base = self.pr_base.get().strip() or "main"
+        body = self.pr_body.get("1.0", tk.END).strip()
+
+        def _work():
+            resp = self.api.create_pull(owner, repo, title, head, base, body)
+            if resp.status_code == 201:
+                rd = resp.json()
+                self.log(f"PR创建成功：{rd.get('html_url', '')}")
+                self.logger.add_history("创建PR", f"{rp}#{rd.get('number', '')}", self.platform, rp)
+            else:
+                self.log(f"创建失败：{resp.status_code}")
+        self._run_async("创建PR", _work, on_done=self._load_pulls)
+
+    def _merge_pull(self):
+        if not self._need_auth():
+            return
+        sel = self.pr_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个PR")
+            return
+        parsed = self._parse_owner_repo(self.pr_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        pr_num = self.pr_tree.item(sel[0], "values")[0]
+        if not self._confirm_dialog("确认合并", f"确定要合并PR #{pr_num}吗？"):
+            return
+        
+        def _work():
+            resp = self.api.merge_pull(owner, repo, pr_num)
+            if resp.status_code == 200:
+                self.log(f"PR #{pr_num} 已合并")
+            else:
+                self.log(f"合并失败：{resp.status_code}")
+        self._run_async("合并PR", _work, on_done=self._load_pulls)
+
+    def _close_pull(self):
+        if not self._need_auth():
+            return
+        sel = self.pr_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个PR")
+            return
+        parsed = self._parse_owner_repo(self.pr_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        pr_num = self.pr_tree.item(sel[0], "values")[0]
+        if not self._confirm_dialog("确认关闭", f"确定要关闭PR #{pr_num}吗？"):
+            return
+        
+        def _work():
+            resp = self.api.close_pull(owner, repo, pr_num)
+            if resp.status_code == 200:
+                self.log(f"PR #{pr_num} 已关闭")
+            else:
+                self.log(f"关闭失败：{resp.status_code}")
+        self._run_async("关闭PR", _work, on_done=self._load_pulls)
+
+    # ─────────────────── 标签页：Webhook ───────────────────
+
+    def _tab_webhook(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["webhook"] = f
+
+        self._make_desc(f,
+            "功能说明：配置仓库的Webhook（网络钩子）。当仓库发生特定事件时，"
+            "GitHub/Gitee会向指定URL发送HTTP请求，常用于CI/CD、自动化通知等场景。", 0)
+
+        r = 1
+        ttk.Label(f, text="仓库 (owner/repo)：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.wh_repo_var = tk.StringVar()
+        ttk.Entry(f, textvariable=self.wh_repo_var, width=28).grid(row=r, column=1, sticky=tk.EW, pady=4)
+        ttk.Button(f, text="加载", command=self._load_webhooks).grid(row=r, column=2, padx=4, pady=4)
+
+        r += 1
+        self._section_label(f, "已有Webhook", r)
+        r += 1
+        cols = ("ID", "URL", "事件", "状态")
+        self.wh_tree = ttk.Treeview(f, columns=cols, show="headings", height=6)
+        for c in cols:
+            self.wh_tree.heading(c, text=c)
+        self.wh_tree.column("ID", width=80, anchor=tk.CENTER)
+        self.wh_tree.column("URL", width=350)
+        self.wh_tree.column("事件", width=150)
+        self.wh_tree.column("状态", width=80, anchor=tk.CENTER)
+        self.wh_tree.grid(row=r, column=0, columnspan=3, sticky=tk.EW, pady=4)
+        wsb = ttk.Scrollbar(f, orient=tk.VERTICAL, command=self.wh_tree.yview)
+        self.wh_tree.configure(yscrollcommand=wsb.set)
+        wsb.grid(row=r, column=3, sticky=tk.NS, pady=4)
+
+        r += 1
+        self._section_label(f, "创建新Webhook", r)
+        r += 1
+        ttk.Label(f, text="URL：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.wh_url = tk.StringVar()
+        ttk.Entry(f, textvariable=self.wh_url).grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        ttk.Label(f, text="事件：").grid(row=r, column=0, sticky=tk.NW, pady=4)
+        ef = ttk.Frame(f)
+        ef.grid(row=r, column=1, columnspan=2, sticky=tk.W, pady=4)
+        self.wh_push = tk.BooleanVar(value=True)
+        self.wh_pr = tk.BooleanVar(value=False)
+        self.wh_release = tk.BooleanVar(value=False)
+        self.wh_issues = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ef, text="push", variable=self.wh_push).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(ef, text="pull_request", variable=self.wh_pr).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(ef, text="release", variable=self.wh_release).pack(side=tk.LEFT, padx=4)
+        ttk.Checkbutton(ef, text="issues", variable=self.wh_issues).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Label(f, text="密钥（可选）：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.wh_secret = tk.StringVar()
+        ttk.Entry(f, textvariable=self.wh_secret, show="*").grid(row=r, column=1, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=3, pady=10)
+        ttk.Button(bf, text="创建Webhook", style="Accent.TButton", command=self._create_webhook).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="测试选中", command=self._test_webhook).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="删除选中", command=self._delete_webhook).pack(side=tk.LEFT, padx=4)
+        f.columnconfigure(1, weight=1)
+
+    def _load_webhooks(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.wh_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        def _work():
+            try:
+                hooks = self.api.list_webhooks(owner, repo)
+                rows = [(hook.get("id", ""), hook.get("config", {}).get("url", ""),
+                         ", ".join(hook.get("events", [])),
+                         "启用" if hook.get("active") else "禁用") for hook in hooks]
+                self.root.after(0, lambda: self._populate_treeview(self.wh_tree, rows))
+                self.log(f"加载了 {len(hooks)} 个Webhook")
+            except Exception as e:
+                self.log(f"加载Webhook失败：{e}")
+        self._run_async("加载Webhook列表", _work)
+
+    def _create_webhook(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.wh_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        rp = f"{owner}/{repo}"
+        url = self.wh_url.get().strip()
+        if not url:
+            messagebox.showwarning("提示", "请输入Webhook URL")
+            return
+        
+        events = []
+        if self.wh_push.get():
+            events.append("push")
+        if self.wh_pr.get():
+            events.append("pull_request")
+        if self.wh_release.get():
+            events.append("release")
+        if self.wh_issues.get():
+            events.append("issues")
+        if not events:
+            events = ["push"]
+        
+        def _work():
+            secret = self.wh_secret.get().strip()
+            resp = self.api.create_webhook(owner, repo, url, events, secret)
+            if resp.status_code == 201:
+                self.log(f"Webhook创建成功")
+                self.logger.add_history("创建Webhook", url, self.platform, rp)
+            else:
+                self.log(f"创建失败：{resp.status_code}")
+        self._run_async("创建Webhook", _work, on_done=self._load_webhooks)
+
+    def _test_webhook(self):
+        if not self._need_auth():
+            return
+        sel = self.wh_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个Webhook")
+            return
+        parsed = self._parse_owner_repo(self.wh_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        hook_id = self.wh_tree.item(sel[0], "values")[0]
+        
+        def _work():
+            resp = self.api.test_webhook(owner, repo, hook_id)
+            if resp.status_code == 204:
+                self.log("Webhook测试成功")
+            else:
+                self.log(f"测试失败：{resp.status_code}")
+        self._run_async("测试Webhook", _work)
+
+    def _delete_webhook(self):
+        if not self._need_auth():
+            return
+        sel = self.wh_tree.selection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个Webhook")
+            return
+        parsed = self._parse_owner_repo(self.wh_repo_var)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        hook_id = self.wh_tree.item(sel[0], "values")[0]
+        if not self._confirm_dialog("确认删除", f"确定要删除Webhook {hook_id}吗？"):
+            return
+        
+        def _work():
+            resp = self.api.delete_webhook(owner, repo, hook_id)
+            if resp.status_code == 204:
+                self.log(f"Webhook {hook_id} 已删除")
+            else:
+                self.log(f"删除失败：{resp.status_code}")
+        self._run_async("删除Webhook", _work, on_done=self._load_webhooks)
+
+    # ─────────────────── 标签页：统计 ───────────────────
+
+    def _tab_stats(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["stats"] = f
+
+        self._make_desc(f,
+            "功能说明：查看仓库统计数据，包括仓库总数、Star总数、语言分布等信息。", 0)
+
+        r = 1
+        ttk.Button(f, text="刷新统计", command=self._load_stats).grid(row=r, column=0, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "总览", r)
+        r += 1
+        t = self._current_theme
+        self.stats_overview = ttk.Label(f, text="点击刷新加载统计数据",
+                                         font=("Segoe UI", self.font_size),
+                                         foreground=t["fg2"])
+        self.stats_overview.grid(row=r, column=0, columnspan=2, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "语言分布", r)
+        r += 1
+        self.stats_lang_frame = ttk.Frame(f)
+        self.stats_lang_frame.grid(row=r, column=0, columnspan=2, sticky=tk.EW, pady=4)
+
+        r += 1
+        self._section_label(f, "最近更新", r)
+        r += 1
+        self.stats_recent = scrolledtext.ScrolledText(f, height=10, wrap=tk.WORD, font=("Consolas", self.font_size),
+                                                       relief=tk.FLAT, bg=t["log_bg"], fg=t["log_fg"],
+                                                       insertbackground=t["log_fg"], selectbackground=t["select_bg"],
+                                                       highlightthickness=0, bd=0)
+        self.stats_recent.grid(row=r, column=0, columnspan=2, sticky=tk.EW, pady=4)
+        f.columnconfigure(0, weight=1)
+
+    def _load_stats(self):
+        if not self._need_auth():
+            return
+        
+        def _work():
+            try:
+                repos = self.api.list_repos()
+                
+                total = len(repos)
+                public = sum(1 for r in repos if not r.get("private"))
+                private = total - public
+                total_stars = sum(r.get("stargazers_count", 0) for r in repos)
+                total_forks = sum(r.get("forks_count", 0) for r in repos)
+                
+                languages = {}
+                for r in repos:
+                    lang = r.get("language") or "未知"
+                    languages[lang] = languages.get(lang, 0) + 1
+                
+                recent = sorted(repos, key=lambda x: x.get("updated_at", ""), reverse=True)[:10]
+                
+                def update():
+                    overview = f"仓库总数：{total}    公开：{public}    私有：{private}\n"
+                    overview += f"总Star：{total_stars:,}    总Fork：{total_forks:,}"
+                    self.stats_overview.config(text=overview)
+                    
+                    for widget in self.stats_lang_frame.winfo_children():
+                        widget.destroy()
+                    sorted_langs = sorted(languages.items(), key=lambda x: x[1], reverse=True)[:8]
+                    for lang, count in sorted_langs:
+                        percent = count / total * 100 if total > 0 else 0
+                        row = ttk.Frame(self.stats_lang_frame)
+                        row.pack(fill=tk.X, pady=2)
+                        ttk.Label(row, text=f"{lang:12}", width=12).pack(side=tk.LEFT)
+                        bar = ttk.Frame(row)
+                        bar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+                        ttk.Label(bar, text=f"{'█' * int(percent / 5)}", foreground=self._current_theme["accent"]).pack(side=tk.LEFT)
+                        ttk.Label(row, text=f"{count} ({percent:.1f}%)", width=12).pack(side=tk.RIGHT)
+                    
+                    self.stats_recent.delete("1.0", tk.END)
+                    for r in recent:
+                        name = r.get("full_name", "")
+                        updated = (r.get("updated_at", ""))[:10]
+                        stars = r.get("stargazers_count", 0)
+                        self.stats_recent.insert(tk.END, f"{name:40} ⭐{stars:6}  {updated}\n")
+                
+                self.root.after(0, update)
+                self.logger.add_history("查看统计", f"共{total}个仓库", self.platform)
+                self.log("统计数据加载完成")
+            except Exception as e:
+                self.log(f"加载统计数据失败：{e}")
+        self._run_async("加载统计数据", _work)
+
+    # ─────────────────── 标签页：设置 ───────────────────
+
+    def _tab_settings(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["settings"] = f
+
+        r = 0
+        self._section_label(f, "网络设置", r)
+        r += 1
+        ttk.Label(f, text="代理地址：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.st_proxy = tk.StringVar(value=self.proxy)
+        ttk.Entry(f, textvariable=self.st_proxy, width=40).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        ttk.Label(f, text="超时时间（秒）：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.st_timeout = tk.StringVar(value=str(self.timeout))
+        ttk.Entry(f, textvariable=self.st_timeout, width=10).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "配置文件管理", r)
+        r += 1
+        ttk.Label(f, text="当前配置：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        pf = ttk.Frame(f)
+        pf.grid(row=r, column=1, sticky=tk.W, pady=4)
+        self.st_profile = tk.StringVar(value=self.current_profile)
+        profiles = self.config_mgr.list_profiles()
+        self.st_profile_cb = ttk.Combobox(pf, textvariable=self.st_profile, values=profiles,
+                                           state="readonly", width=15)
+        self.st_profile_cb.pack(side=tk.LEFT)
+        ttk.Button(pf, text="切换", command=self._switch_profile).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pf, text="新建", command=self._new_profile).pack(side=tk.LEFT, padx=4)
+        ttk.Button(pf, text="删除", command=self._delete_profile).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=1, sticky=tk.W, pady=4)
+        ttk.Button(bf, text="导出配置", command=self._export_config).pack(side=tk.LEFT, padx=4)
+        ttk.Button(bf, text="导入配置", command=self._import_config).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        self._section_label(f, "Git设置", r)
+        r += 1
+        ttk.Label(f, text="默认.gitignore模板：").grid(row=r, column=0, sticky=tk.W, pady=4)
+        self.st_gitignore = tk.StringVar(value="通用")
+        ttk.Combobox(f, textvariable=self.st_gitignore, values=list(GITIGNORE_TEMPLATES.keys()),
+                      state="readonly", width=10).grid(row=r, column=1, sticky=tk.W, pady=4)
+
+        r += 1
+        self._section_label(f, "日志设置", r)
+        r += 1
+        lbf = ttk.Frame(f)
+        lbf.grid(row=r, column=1, sticky=tk.W, pady=4)
+        ttk.Button(lbf, text="打开日志目录", command=self._open_log_dir).pack(side=tk.LEFT, padx=4)
+        ttk.Button(lbf, text="清空历史记录", command=self._clear_history).pack(side=tk.LEFT, padx=4)
+
+        r += 1
+        ttk.Button(f, text="保存设置", style="Accent.TButton", command=self._save_settings).grid(
+            row=r, column=1, sticky=tk.W, pady=16)
+
+    def _switch_profile(self):
+        profile = self.st_profile.get()
+        self.cfg = self.config_mgr.load_profile(profile)
+        self.current_profile = profile
+        self.cfg["current_profile"] = profile
+        save_config(self.cfg, profile)
+        self.log(f"已切换到配置：{profile}")
+        self._refresh()
+
+    def _new_profile(self):
+        name = simpledialog.askstring("新建配置", "请输入配置名称：")
+        if name:
+            self.config_mgr.save_profile(name, {})
+            self.log(f"已创建配置：{name}")
+            profiles = self.config_mgr.list_profiles()
+            self.st_profile_cb.config(values=profiles)
+
+    def _delete_profile(self):
+        profile = self.st_profile.get()
+        if profile == "default":
+            messagebox.showwarning("提示", "不能删除默认配置")
+            return
+        if self._confirm_dialog("确认删除", f"确定要删除配置 {profile} 吗？"):
+            self.config_mgr.delete_profile(profile)
+            self.log(f"已删除配置：{profile}")
+            profiles = self.config_mgr.list_profiles()
+            self.st_profile_cb.config(values=profiles)
+            self.st_profile.set("default")
+
+    def _export_config(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json")],
+            title="导出配置"
+        )
+        if path:
+            self.config_mgr.export_config(path, self.current_profile)
+            self.log(f"配置已导出到：{path}")
+
+    def _import_config(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON", "*.json")],
+            title="导入配置"
+        )
+        if path:
+            self.config_mgr.import_config(path, self.current_profile)
+            self.cfg = self.config_mgr.load_profile(self.current_profile)
+            self.log(f"配置已导入：{path}")
+            self._refresh()
+
+    def _open_log_dir(self):
+        if sys.platform == "win32":
+            os.startfile(LOGS_DIR)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", LOGS_DIR])
+        else:
+            subprocess.Popen(["xdg-open", LOGS_DIR])
+
+    def _clear_history(self):
+        if self._confirm_dialog("确认清空", "确定要清空所有历史记录吗？"):
+            self.logger.clear_history()
+            self.log("历史记录已清空")
+
+    def _save_settings(self):
+        self.proxy = self.st_proxy.get().strip()
+        try:
+            self.timeout = int(self.st_timeout.get())
+        except (ValueError, TypeError):
+            self.timeout = HTTP_TIMEOUT
+        
+        self.cfg["proxy"] = self.proxy
+        self.cfg["timeout"] = self.timeout
+        save_config(self.cfg, self.current_profile)
+        
+        self.log("设置已保存")
+        messagebox.showinfo("提示", "设置已保存，部分设置需要重启生效")
+
+    # ─────────────────── 标签页：关于 ───────────────────
+
+    def _tab_about(self):
+        t = self._current_theme
+        f = tk.Frame(self.content_frame, bg=t["bg"], padx=12, pady=12)
+        self._tab_frames["about"] = f
+
+        if self._icon_small:
+            ttk.Label(f, image=self._icon_small).grid(row=0, column=0, columnspan=2, pady=(10, 6))
+
+        ttk.Label(f, text=f"{APP_NAME} v{APP_VERSION}",
+                  font=("Segoe UI", 14, "bold"),
+                  foreground=t["accent"]).grid(row=1, column=0, columnspan=2, pady=4)
+
+        ttk.Label(f, text="GitHub / Gitee 本地代码管理工具",
+                  font=("Segoe UI", 10),
+                  foreground=t["fg2"]).grid(row=2, column=0, columnspan=2, pady=2)
+
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=10)
+
+        info_frame = ttk.Frame(f)
+        info_frame.grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=20)
+
+        ttk.Label(info_frame, text="开发者：", font=("Segoe UI", 10, "bold"),
+                  foreground=t["fg"]).grid(row=0, column=0, sticky=tk.W, pady=3)
+        ttk.Label(info_frame, text=APP_AUTHOR, font=("Segoe UI", 10),
+                  foreground=t["fg"]).grid(row=0, column=1, sticky=tk.W, pady=3, padx=8)
+
+        ttk.Label(info_frame, text="版本号：", font=("Segoe UI", 10, "bold"),
+                  foreground=t["fg"]).grid(row=1, column=0, sticky=tk.W, pady=3)
+        ttk.Label(info_frame, text=f"v{APP_VERSION}", font=("Segoe UI", 10),
+                  foreground=t["fg"]).grid(row=1, column=1, sticky=tk.W, pady=3, padx=8)
+
+        ttk.Label(info_frame, text="Python：", font=("Segoe UI", 10, "bold"),
+                  foreground=t["fg"]).grid(row=2, column=0, sticky=tk.W, pady=3)
+        ttk.Label(info_frame, text=f"{sys.version.split()[0]}", font=("Segoe UI", 10),
+                  foreground=t["fg"]).grid(row=2, column=1, sticky=tk.W, pady=3, padx=8)
+
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=5, column=0, columnspan=2, sticky=tk.EW, pady=10)
+
+        ttk.Label(f, text="v10.5 优化内容",
+                  font=("Segoe UI", 11, "bold"),
+                  foreground=t["accent"]).grid(row=6, column=0, columnspan=2, pady=(4, 6))
+
+        features = [
+            "• [修复] 添加缺失的 import base64，修复 Token 加密/解密运行时崩溃",
+            "• [修复] upload_release_asset 改用 NetworkManager，恢复重试/代理/超时支持",
+            "• [修复] os.startfile 改为跨平台兼容（Windows/macOS/Linux）",
+            "• [修复] _batch_upload 分支从硬编码 'main' 改为读取用户设置",
+            "• [修复] _show_loading 的 root.update() 改为 update_idletasks() 防止事件循环重入",
+            "• [重构] 提取 _run_async 辅助方法，消除 36 处线程模式重复代码",
+            "• [重构] 提取 _parse_owner_repo 辅助方法，消除 18 处验证+拆分重复",
+            "• [重构] 提取 _populate_treeview 辅助方法，消除 8 处列表清空+填充重复",
+            "• [清理] 删除未使用的 import（io/ThreadPoolExecutor）和方法（check_ssh/get_submodules）",
+            "• [规范] 提取 15 个命名常量替换魔法数字，添加类型注解",
+        ]
+        for i, feat in enumerate(features):
+            ttk.Label(f, text=feat, font=("Segoe UI", 9),
+                      foreground=t["fg2"]).grid(row=7+i, column=0, columnspan=2, sticky=tk.W, padx=20)
+
+        ttk.Separator(f, orient=tk.HORIZONTAL).grid(row=18, column=0, columnspan=2, sticky=tk.EW, pady=10)
+
+        ttk.Label(f, text="联系方式 - 微信扫码添加好友",
+                  font=("Segoe UI", 11, "bold"),
+                  foreground=t["accent"]).grid(row=19, column=0, columnspan=2, pady=(4, 6))
+
+        if self._weixin_small:
+            ttk.Label(f, image=self._weixin_small).grid(row=20, column=0, columnspan=2, pady=4)
+        else:
+            ttk.Label(f, text="[ 微信二维码图片未找到 ]", foreground=t["fg3"]).grid(row=20, column=0, columnspan=2, pady=4)
+
+        f.columnconfigure(0, weight=1)
+
+    # ─────────────────── 平台切换 ───────────────────
+
+    def _on_platform_change(self, event=None):
+        self.platform = self.platform_var.get()
+        self.cfg["platform"] = self.platform
+        save_config(self.cfg, self.current_profile)
+        self.api = None
+        self.user = None
+        self.user_lbl.config(text="未登录")
+        self.log(f"已切换到 {self.platform} 平台，请重新设置Token")
+        self._update_status_bar()
+
+    # ─────────────────── Git 检测 ───────────────────
+
+    def _check_git(self):
+        if not check_git_installed():
+            self.log("警告：未检测到Git安装")
+            if messagebox.askyesno("Git 未安装",
+                                    "本软件需要 Git 才能正常工作。\n\n"
+                                    "是否打开 Git 下载页面？\n"
+                                    "下载安装后请重启本软件。"):
+                webbrowser.open(GIT_DOWNLOAD_URL)
+
+    # ─────────────────── 主题切换 ───────────────────
+
+    def _on_theme_change(self, event=None):
+        name = self.theme_var.get()
+        if name == "自定义":
+            self._open_color_picker()
+            return
+        self.theme_name = name
+        self.cfg["theme"] = name
+        save_config(self.cfg, self.current_profile)
+        self._rebuild_theme()
+
+    def _on_font_change(self, event=None):
+        try:
+            self.font_size = int(self.font_var.get())
+        except ValueError:
+            return
+        self.cfg["font_size"] = self.font_size
+        save_config(self.cfg, self.current_profile)
+        self._rebuild_theme()
+
+    def _on_dark_toggle(self):
+        self.dark_mode = self.dark_var.get()
+        self.cfg["dark_mode"] = self.dark_mode
+        save_config(self.cfg, self.current_profile)
+        self._rebuild_theme()
+
+    def _open_color_picker(self):
+        t = self._current_theme
+        d = tk.Toplevel(self.root)
+        d.title("自定义配色方案")
+        d.geometry("450x400")
+        d.resizable(False, False)
+        d.transient(self.root)
+        d.grab_set()
+        d.configure(bg=t["bg2"])
+
+        mode = "dark" if self.dark_var.get() else "light"
+        colors = self.custom_colors.get(mode, CUSTOM_THEME_TEMPLATE[mode])
+
+        color_vars = {}
+        labels = {
+            "bg": "主背景色", "fg": "主文字色", "accent": "强调色",
+            "btn_bg": "按钮背景", "btn_fg": "按钮文字",
+            "entry_bg": "输入框背景", "entry_fg": "输入框文字",
+            "tree_bg": "列表背景", "tree_fg": "列表文字",
+        }
+
+        main_frame = ttk.Frame(d, padding=12)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        row = 0
+        ttk.Label(main_frame, text="自定义配色（点击色块选择颜色）",
+                  font=("Segoe UI", 11, "bold"),
+                  foreground=t["accent"]).grid(row=row, column=0, columnspan=3, pady=(0, 10))
+
+        for key, label in labels.items():
+            row += 1
+            var = tk.StringVar(value=colors.get(key, "#ffffff"))
+            color_vars[key] = var
+            ttk.Label(main_frame, text=f"{label}：", width=12, anchor=tk.W).grid(row=row, column=0, sticky=tk.W, pady=4, padx=4)
+            preview = tk.Frame(main_frame, width=28, height=20, bg=colors.get(key, "#ffffff"), relief="solid", bd=1)
+            preview.grid(row=row, column=1, padx=4, pady=4)
+            entry = ttk.Entry(main_frame, textvariable=var, width=12)
+            entry.grid(row=row, column=2, padx=4, pady=4)
+
+            def pick_color(v=var, p=preview, k=key):
+                c = colorchooser.askcolor(color=v.get(), title=f"选择 {labels.get(k, k)}")
+                if c and c[1]:
+                    v.set(c[1])
+                    p.configure(bg=c[1])
+
+            ttk.Button(main_frame, text="选色", width=5, command=pick_color).grid(row=row, column=3, padx=4, pady=4)
+
+        def apply_custom():
+            for key, var in color_vars.items():
+                val = var.get().strip()
+                if val.startswith("#") and len(val) == 7:
+                    self.custom_colors[mode][key] = val
+            self.cfg["custom_colors"] = self.custom_colors
+            self.theme_name = "自定义"
+            self.cfg["theme"] = "自定义"
+            save_config(self.cfg, self.current_profile)
+            self.theme_var.set("自定义")
+            self._rebuild_theme()
+            d.destroy()
+
+        bf = ttk.Frame(main_frame)
+        bf.grid(row=row + 1, column=0, columnspan=4, pady=(16, 0))
+        ttk.Button(bf, text="应用配色", style="Accent.TButton", command=apply_custom).pack(side=tk.RIGHT, padx=4)
+        ttk.Button(bf, text="取消", command=d.destroy).pack(side=tk.RIGHT, padx=4)
+
+    # ─────────────────── 认证 ───────────────────
+
+    def _auto_login(self):
+        token = self.cfg.get(f"token_{self.platform}", self.cfg.get("token", ""))
+        if token:
+            self._set_token(token)
+
+    def _token_dlg(self):
+        t = self._current_theme
+        d = tk.Toplevel(self.root)
+        d.title(f"{self.platform} Token 设置")
+        d.geometry("540x220")
+        d.resizable(False, False)
+        d.transient(self.root)
+        d.grab_set()
+        d.configure(bg=t["bg2"])
+
+        note = ""
+        if self.platform == "GitHub":
+            note = "获取路径：GitHub → Settings → Developer settings → Personal access tokens (classic)"
+        else:
+            note = "获取路径：Gitee → 设置 → 私人令牌"
+
+        ttk.Label(d, text=f"{self.platform} Personal Access Token：",
+                  font=("Segoe UI", self.font_size + 1),
+                  background=t["bg2"], foreground=t["fg"]).pack(padx=16, pady=(16, 4), anchor=tk.W)
+        tv = tk.StringVar(value=self.cfg.get(f"token_{self.platform}", self.cfg.get("token", "")))
+        ttk.Entry(d, textvariable=tv, width=58, show="•").pack(padx=16, fill=tk.X)
+        ttk.Label(d, text=note, foreground=t["fg3"],
+                  font=("Segoe UI", self.font_size - 1),
+                  background=t["bg2"]).pack(padx=16, pady=4, anchor=tk.W)
+
+        def ok():
+            token = tv.get().strip()
+            if not token:
+                messagebox.showwarning("提示", "请输入Token", parent=d)
+                return
+            self._set_token(token)
+            self.cfg[f"token_{self.platform}"] = token
+            save_config(self.cfg, self.current_profile)
+            d.destroy()
+
+        ttk.Button(d, text="保存", style="Accent.TButton", command=ok).pack(pady=14)
+
+    def _set_token(self, token):
+        self.api = PlatformAPI(self.platform, token, logger=self.logger, proxy=self.proxy, timeout=self.timeout)
+        u = self.api.get_user()
+        if u:
+            self.user = u
+            self.user_lbl.config(text=f"[{self.platform}] 已登录：{u['login']}")
+            self.logger.log(f"认证成功：{u['login']} ({u.get('email', 'N/A')})")
+            self.logger.log(f"Token: {mask_token(token)}")
+            self.logger.add_history("登录", f"{self.platform} - {u['login']}", self.platform)
+        else:
+            self.user_lbl.config(text=f"[{self.platform}] 认证失败")
+            self.logger.log("Token认证失败，请检查Token是否正确或已过期")
+
+    def _need_auth(self):
+        if not self.api or not self.user:
+            messagebox.showwarning("提示", f"请先设置{self.platform} Token")
+            self._token_dlg()
+            return False
+        return True
+
+    def _cleanup(self):
+        # Token 已加密保存在磁盘，退出只清内存，下次启动可自动解密恢复
+        self.api = None
+        self.user = None
+        for p in PLATFORMS:
+            self.cfg.pop(f"token_{p}", None)
+        self.cfg.pop("token", None)
+
+    # ─────────────────── 文件浏览 ───────────────────
+
+    def _browse(self, var, auto_name=None):
+        p = filedialog.askdirectory(title="选择本地项目文件夹")
+        if p:
+            var.set(p)
+            if auto_name and not auto_name.get():
+                auto_name.set(os.path.basename(p))
+
+    def _browse_dir(self, var):
+        p = filedialog.askdirectory(title="选择目标文件夹")
+        if p:
+            var.set(p)
+
+    def _browse_assets(self):
+        files = filedialog.askopenfilenames(title="选择要上传的文件")
+        if files:
+            self.rl_assets_var.set(";".join(files))
+
+    # ─────────────────── 上传 ───────────────────
+
+    def _do_upload(self):
+        if not self._need_auth():
+            return
+        path = self.up_path.get().strip()
+        name = self.up_name.get().strip()
+        if not path or not os.path.isdir(path):
+            messagebox.showerror("错误", "请选择有效的本地项目路径")
+            return
+        
+        is_valid, error_msg = validate_repo_name(name)
+        if not is_valid:
+            messagebox.showerror("输入错误", error_msg)
+            return
+        
+        branch = self.up_branch.get().strip() or "main"
+        is_valid, error_msg = validate_branch_name(branch)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"分支名无效：{error_msg}")
+            return
+
+        desc = self.up_desc.get().strip()
+        priv = self.up_priv.get()
+        lic = LICENSES.get(self.up_license.get(), "")
+        msg = self.up_msg.get().strip() or "Initial commit"
+        gitignore_template = self.up_gitignore.get()
+
+        def _work():
+            target_branch = branch
+
+            if gitignore_template:
+                self.git.create_gitignore(path, gitignore_template)
+
+            self.log(f"正在创建远程仓库：{name}...")
+            resp = self.api.create_repo(name, desc, priv, lic, auto_init=False)
+            if resp.status_code == 201:
+                data = resp.json()
+                clone_url = self.api.get_clone_url(data)
+                html_url = self.api.get_html_url(data)
+                self.log(f"远程仓库创建成功：{html_url}")
+            elif resp.status_code == 422:
+                self.log(f"仓库 {name} 已存在，将直接关联...")
+                data = self.api.get_repo(self.user["login"], name).json()
+                clone_url = self.api.get_clone_url(data)
+                html_url = self.api.get_html_url(data)
+            else:
+                self.log(f"创建失败：{resp.status_code} {resp.text}")
+                return
+
+            if not self.git.is_repo(path):
+                self.git.init(path)
+
+            username = self.user.get("login", "user")
+            email = self.user.get("email") or f"{username}@users.noreply.com"
+            if email == "N/A":
+                email = f"{username}@users.noreply.com"
+            self.git.set_user_info(path, username, email)
+            self.git.remote(path, clone_url)
+            self.git.ensure_branch(path, target_branch)
+
+            if resp.status_code == 201 and lic:
+                self.git.pull_unrelated(path, "origin", target_branch)
+                self.git.add_all(path)
+                self.git.commit(path, msg)
+            elif resp.status_code == 201 and not lic:
+                self.git.add_all(path)
+                ok_c, _, _ = self.git.commit(path, msg)
+                if not ok_c:
+                    self.log("没有新的更改需要提交")
+
+            ok, _, _ = self.git.push(path, "origin", target_branch)
+            if ok:
+                self.log("上传完成！")
+                self._repos_cache.append({"path": path, "name": name, "url": html_url})
+                self.cfg["local_repos"] = self._repos_cache
+                save_config(self.cfg, self.current_profile)
+                self.logger.add_history("上传代码", f"{name}", self.platform, name)
+            else:
+                self.log("推送失败，请检查网络和权限，或在\"更新推送\"页面勾选\"强制推送\"后重试")
+        self._run_async("创建仓库并上传", _work)
+
+    def _do_create_repo(self):
+        if not self._need_auth():
+            return
+        name = self.up_name.get().strip()
+        
+        is_valid, error_msg = validate_repo_name(name)
+        if not is_valid:
+            messagebox.showerror("输入错误", error_msg)
+            return
+
+        lic = LICENSES.get(self.up_license.get(), "")
+        desc = self.up_desc.get().strip()
+        priv = self.up_priv.get()
+
+        def _work():
+            self.log(f"正在创建远程仓库：{name}...")
+            resp = self.api.create_repo(name, desc, priv, lic, auto_init=True)
+            if resp.status_code == 201:
+                self.log(f"仓库创建成功：{self.api.get_html_url(resp.json())}")
+                self.logger.add_history("创建仓库", name, self.platform, name)
+            elif resp.status_code == 422:
+                self.log(f"仓库 {name} 已存在")
+            else:
+                self.log(f"创建失败：{resp.status_code} {resp.text}")
+        self._run_async("创建远程仓库", _work)
+
+    def _batch_upload(self):
+        """批量上传多个项目"""
+        # tkinter 不提供多目录选择，用循环让用户逐个选择
+        folders = []
+        while True:
+            p = filedialog.askdirectory(title=f"选择项目文件夹（已选 {len(folders)} 个，取消结束选择）")
+            if not p:
+                break
+            if p not in folders:
+                folders.append(p)
+        if not folders:
+            return
+
+        if not self._need_auth():
+            return
+
+        branch = self.up_branch.get().strip() or "main"
+        
+        def _work():
+            success = 0
+            fail = 0
+            for folder in folders:
+                name = os.path.basename(folder)
+                self.log(f"开始上传：{name}")
+                try:
+                    resp = self.api.create_repo(name, auto_init=False)
+                    if resp.status_code in (201, 422):
+                        if resp.status_code == 201:
+                            data = resp.json()
+                            clone_url = self.api.get_clone_url(data)
+                        else:
+                            data = self.api.get_repo(self.user["login"], name).json()
+                            clone_url = self.api.get_clone_url(data)
+                        
+                        if not self.git.is_repo(folder):
+                            self.git.init(folder)
+                        self.git.remote(folder, clone_url)
+                        self.git.add_all(folder)
+                        self.git.commit(folder, "Initial commit")
+                        ok, _, _ = self.git.push(folder, "origin", branch)
+                        if ok:
+                            self.log(f"{name} 上传成功")
+                            success += 1
+                        else:
+                            self.log(f"{name} 推送失败")
+                            fail += 1
+                    else:
+                        self.log(f"{name} 创建仓库失败：{resp.status_code}")
+                        fail += 1
+                except Exception as e:
+                    self.log(f"{name} 上传异常：{e}")
+                    fail += 1
+            
+            self.log(f"批量上传完成：成功 {success}，失败 {fail}")
+        self._run_async("批量上传", _work)
+
+    # ─────────────────── 更新 ───────────────────
+
+    def _do_commit_push(self):
+        path = self.ud_path.get().strip()
+        if not path or not os.path.isdir(path):
+            messagebox.showerror("错误", "请选择有效的本地项目路径")
+            return
+        
+        if not self.git.is_repo(path):
+            messagebox.showerror("错误", "所选目录不是Git仓库\n\n请先初始化Git或选择已有的Git仓库")
+            return
+        
+        branch = self.ud_branch.get().strip() or "main"
+        is_valid, error_msg = validate_branch_name(branch)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"分支名无效：{error_msg}")
+            return
+        
+        msg = self.ud_msg.get().strip() or "Update"
+        force = self.ud_force.get()
+
+        def _work():
+            try:
+                current_branch = self.git.current_branch(path)
+                if current_branch:
+                    self.log(f"当前分支：{current_branch}")
+                    if current_branch == "master" and branch == "main":
+                        self.log("重命名分支 master -> main")
+                        self.git.rename_branch(path, "master", "main")
+                        current_branch = "main"
+                else:
+                    current_branch = branch
+
+                self.log("正在同步远程仓库...")
+                pull_ok, _, _ = self.git.pull_with_strategy(path, "origin", current_branch)
+                if not pull_ok:
+                    self.log("拉取失败，尝试以本地为准合并...")
+                    self.git.pull_with_strategy(path, "origin", current_branch, strategy="ours")
+
+                self.log(f"正在提交：{msg}")
+                self.git.add_all(path)
+                ok_c, _, _ = self.git.commit(path, msg)
+                if not ok_c:
+                    self.log("没有新的更改需要提交")
+
+                self.log(f"正在推送到 {current_branch}...")
+                ok, _, _ = self.git.push(path, "origin", current_branch, force=force)
+                if ok:
+                    self.log("推送完成！")
+                    self.logger.add_history("推送代码", f"分支：{current_branch}", self.platform)
+                else:
+                    self.log("推送失败，请检查网络和权限，或勾选\"强制推送\"后重试")
+            except Exception as e:
+                self.log(f"操作异常：{e}")
+        self._run_async("提交并推送", _work)
+
+    def _do_commit(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请选择本地项目路径")
+            return
+        if not self.git.is_repo(path):
+            messagebox.showerror("错误", "所选目录不是Git仓库")
+            return
+        msg = self.ud_msg.get().strip() or "Update"
+        def _work():
+            self.git.add_all(path)
+            ok, _, _ = self.git.commit(path, msg)
+            self.log("提交完成" if ok else "没有更改需要提交")
+        self._run_async("提交", _work)
+
+    def _do_push(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请选择本地项目路径")
+            return
+        if not self.git.is_repo(path):
+            messagebox.showerror("错误", "所选目录不是Git仓库")
+            return
+        branch = self.ud_branch.get().strip() or "main"
+        is_valid, error_msg = validate_branch_name(branch)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"分支名无效：{error_msg}")
+            return
+        force = self.ud_force.get()
+        def _work():
+            ok, _, _ = self.git.push(path, "origin", branch, force)
+            self.log("推送完成！" if ok else "推送失败")
+        self._run_async("推送", _work)
+
+    def _do_pull(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请选择本地项目路径")
+            return
+        if not self.git.is_repo(path):
+            messagebox.showerror("错误", "所选目录不是Git仓库")
+            return
+        branch = self.ud_branch.get().strip() or "main"
+        is_valid, error_msg = validate_branch_name(branch)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"分支名无效：{error_msg}")
+            return
+        def _work():
+            ok, msg = self.git.pull_with_conflict_check(path, "origin", branch)
+            if ok:
+                self.log("拉取完成")
+            else:
+                self.log(f"拉取失败：{msg}")
+        self._run_async("拉取远程代码", _work)
+
+    def _init_git(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请先选择本地项目路径")
+            return
+        if not os.path.isdir(path):
+            messagebox.showerror("错误", "所选路径不是有效的目录")
+            return
+        if self.git.is_repo(path):
+            messagebox.showinfo("提示", "该目录已经是Git仓库，无需重复初始化")
+            return
+        def _work():
+            ok, _, _ = self.git.init(path)
+            if ok:
+                self.log(f"Git初始化成功：{path}")
+                self.git.add_all(path)
+                self.git.commit(path, "Initial commit")
+                self.log("已创建初始提交")
+                self.logger.add_history("初始化Git", path, self.platform)
+                self.root.after(0, lambda: messagebox.showinfo("成功", "Git初始化完成！"))
+            else:
+                self.log("Git初始化失败")
+        self._run_async("初始化Git", _work)
+
+    def _set_remote(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请先选择本地项目路径")
+            return
+        if not self.git.is_repo(path):
+            messagebox.showerror("错误", "所选目录不是Git仓库，请先初始化Git")
+            return
+        remote_url = self.ud_remote_url.get().strip()
+        if not remote_url:
+            messagebox.showerror("错误", "请输入远程仓库地址")
+            return
+        def _work():
+            ok, _, _ = self.git.remote(path, remote_url)
+            if ok:
+                self.log(f"远程仓库关联成功：{remote_url}")
+                self.logger.add_history("关联远程仓库", remote_url, self.platform)
+                self.root.after(0, lambda: messagebox.showinfo("成功", "远程仓库关联成功！"))
+            else:
+                self.log("关联远程仓库失败")
+        self._run_async("关联远程仓库", _work)
+
+    def _init_and_set_remote(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请先选择本地项目路径")
+            return
+        if not os.path.isdir(path):
+            messagebox.showerror("错误", "所选路径不是有效的目录")
+            return
+        remote_url = self.ud_remote_url.get().strip()
+        if not remote_url:
+            messagebox.showerror("错误", "请输入远程仓库地址")
+            return
+        def _work():
+            try:
+                if not self.git.is_repo(path):
+                    self.log("正在初始化Git...")
+                    ok, _, _ = self.git.init(path)
+                    if not ok:
+                        self.log("Git初始化失败")
+                        return
+                    self.log("Git初始化成功")
+                self.log("正在关联远程仓库...")
+                ok, _, _ = self.git.remote(path, remote_url)
+                if ok:
+                    self.log(f"远程仓库关联成功：{remote_url}")
+                else:
+                    self.log("关联远程仓库失败")
+                    return
+                if not self.git.has_commits(path):
+                    self.log("正在创建初始提交...")
+                    self.git.add_all(path)
+                    self.git.commit(path, "Initial commit")
+                    self.log("初始提交创建成功")
+                
+                current_branch = self.git.current_branch(path)
+                if current_branch and current_branch != "main":
+                    self.log(f"重命名分支 {current_branch} -> main")
+                    self.git.rename_branch(path, current_branch, "main")
+                self.logger.add_history("初始化并关联", f"{path} -> {remote_url}", self.platform)
+                self.root.after(0, lambda: messagebox.showinfo("成功", "初始化完成！现在可以提交并推送代码。"))
+            except Exception as e:
+                self.log(f"操作异常：{e}")
+        self._run_async("初始化并关联远程仓库", _work)
+
+    def _refresh_status(self):
+        path = self.ud_path.get().strip()
+        if not path:
+            return
+        self.ud_status.delete("1.0", tk.END)
+        s = self.git.status(path)
+        self.ud_status.insert(tk.END, s if s else "工作区干净，无更改")
+        br = self.git.current_branch(path)
+        if br:
+            self.ud_status.insert(tk.END, f"\n\n当前分支：{br}")
+            self.ud_branch.set(br)
+        lg = self.git.log(path, 5)
+        if lg:
+            self.ud_status.insert(tk.END, f"\n\n最近提交：\n{lg}")
+
+    # ─────────────────── 分支 ───────────────────
+
+    def _load_branches(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.br_repo)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        def _work():
+            try:
+                branches = self.api.list_branches(owner, repo)
+                def update():
+                    self.br_list.delete(0, tk.END)
+                    for b in branches:
+                        self.br_list.insert(tk.END, b["name"])
+                self.root.after(0, update)
+                self.log(f"加载了 {len(branches)} 个分支")
+            except Exception as e:
+                self.log(f"加载分支失败：{e}")
+        self._run_async("加载分支列表", _work)
+
+    def _br_local(self):
+        path = self.br_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请选择本地项目路径")
+            return
+        nb = self.br_new.get().strip()
+        is_valid, error_msg = validate_branch_name(nb)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"分支名无效：{error_msg}")
+            return
+        base = self.br_base.get().strip() or "main"
+        is_valid, error_msg = validate_branch_name(base)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"基础分支名无效：{error_msg}")
+            return
+        def _work():
+            self.git.checkout(path, base)
+            ok, _, _ = self.git.checkout(path, nb, create=True)
+            self.log(f"本地分支 {nb} 创建成功" if ok else "创建分支失败")
+        self._run_async("创建本地分支", _work)
+
+    def _br_remote(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.br_repo)
+        if not parsed:
+            return
+        owner, repo = parsed
+        nb = self.br_new.get().strip()
+        is_valid, error_msg = validate_branch_name(nb)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"分支名无效：{error_msg}")
+            return
+        base = self.br_base.get().strip() or "main"
+        is_valid, error_msg = validate_branch_name(base)
+        if not is_valid:
+            messagebox.showerror("输入错误", f"基础分支名无效：{error_msg}")
+            return
+        
+        def _work():
+            sha = self.api.get_branch_sha(owner, repo, base)
+            if not sha:
+                self.log(f"无法获取基础分支 {base} 的SHA")
+                return
+            resp = self.api.create_branch(owner, repo, nb, sha)
+            if resp.status_code in (201, 200):
+                self.log(f"远程分支 {nb} 创建成功")
+            else:
+                self.log(f"创建失败：{resp.status_code} {resp.text}")
+        self._run_async("创建远程分支", _work, on_done=self._load_branches)
+
+    def _br_switch(self):
+        path = self.br_path.get().strip()
+        if not path:
+            messagebox.showerror("错误", "请选择本地项目路径")
+            return
+        sel = self.br_list.curselection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个分支")
+            return
+        br = self.br_list.get(sel[0])
+        if not self._confirm_dialog("确认切换", f"确定要切换到分支 {br} 吗？"):
+            return
+        def _work():
+            ok, _, _ = self.git.checkout(path, br)
+            self.log(f"已切换到分支：{br}" if ok else "切换失败")
+        self._run_async(f"切换到分支 {br}", _work)
+
+    def _br_delete(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.br_repo)
+        if not parsed:
+            return
+        owner, repo = parsed
+        sel = self.br_list.curselection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个分支")
+            return
+        br = self.br_list.get(sel[0])
+        if not self._confirm_dialog("确认删除", f"确定要删除远程分支 {br} 吗？\n\n此操作不可撤销！"):
+            return
+        
+        def _work():
+            resp = self.api.delete_branch(owner, repo, br)
+            if resp.status_code in (204, 200):
+                self.log(f"远程分支 {br} 已删除")
+            else:
+                self.log(f"删除失败：{resp.status_code} {resp.text}")
+        self._run_async(f"删除远程分支 {br}", _work, on_done=self._load_branches)
+
+    # ─────────────────── Fork ───────────────────
+
+    def _do_fork(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.fk_repo)
+        if not parsed:
+            return
+        owner, repo = parsed
+        rp = f"{owner}/{repo}"
+        
+        def _work():
+            self.log(f"正在Fork：{owner}/{repo}...")
+            resp = self.api.fork_repo(owner, repo)
+            if resp.status_code in (202, 201, 200):
+                fd = resp.json()
+                self.log(f"Fork成功：{self.api.get_html_url(fd)}")
+                self.logger.add_history("Fork仓库", rp, self.platform, rp)
+                if self.fk_auto.get():
+                    lp = self.fk_local.get().strip() or os.path.join(os.getcwd(), repo)
+                    if resp.status_code == 202:
+                        fork_owner = fd.get("owner", {}).get("login", self.api.username)
+                        fork_name = fd.get("name", repo)
+                        for _ in range(10):
+                            time.sleep(3)
+                            chk = self.api.get_repo(fork_owner, fork_name)
+                            if chk and chk.status_code == 200:
+                                break
+                    self.git.clone(self.api.get_clone_url(fd), lp)
+                    self.log(f"克隆完成：{lp}")
+            else:
+                self.log(f"Fork失败：{resp.status_code} {resp.text}")
+        self._run_async("Fork仓库", _work)
+
+    def _do_clone(self):
+        url = self.fk_repo.get().strip()
+        lp = self.fk_local.get().strip()
+        if not url:
+            messagebox.showerror("错误", "请输入仓库地址或 用户名/仓库名")
+            return
+        if not lp:
+            messagebox.showerror("错误", "请选择克隆目标路径")
+            return
+        if "/" in url and not url.startswith("http"):
+            url = f"{PLATFORMS[self.platform]['web']}/{url}.git"
+        def _work():
+            self.git.clone(url, lp)
+            self.log(f"克隆完成：{lp}")
+        self._run_async("克隆仓库", _work)
+
+    def _fk_load(self):
+        if not self._need_auth():
+            return
+        
+        def _work():
+            try:
+                repos = self.api.list_repos()
+                def update():
+                    self.fk_list.delete(0, tk.END)
+                    for r in repos:
+                        vis = "Private" if r["private"] else "Public"
+                        self.fk_list.insert(tk.END, f"{r['full_name']}  [{vis}]")
+                self.root.after(0, update)
+                self.log(f"加载了 {len(repos)} 个仓库")
+            except Exception as e:
+                self.log(f"加载仓库列表失败：{e}")
+        self._run_async("加载仓库列表", _work)
+
+    def _fk_selected(self):
+        sel = self.fk_list.curselection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择一个仓库")
+            return
+        text = self.fk_list.get(sel[0])
+        self.fk_repo.set(text.split("  ")[0].strip())
+        self._do_fork()
+
+    def _batch_fork(self):
+        """批量Fork仓库"""
+        if not self._need_auth():
+            return
+        sel = self.fk_list.curselection()
+        if not sel:
+            messagebox.showwarning("提示", "请先选择要Fork的仓库（可多选）")
+            return
+        
+        repos = [self.fk_list.get(i).split("  ")[0].strip() for i in sel]
+        
+        def _work():
+            success = 0
+            fail = 0
+            for rp in repos:
+                try:
+                    owner, repo = rp.split("/", 1)
+                    self.log(f"正在Fork：{rp}...")
+                    resp = self.api.fork_repo(owner, repo)
+                    if resp.status_code in (202, 201, 200):
+                        self.log(f"{rp} Fork成功")
+                        success += 1
+                    else:
+                        self.log(f"{rp} Fork失败：{resp.status_code}")
+                        fail += 1
+                except Exception as e:
+                    self.log(f"{rp} Fork异常：{e}")
+                    fail += 1
+            
+            self.log(f"批量Fork完成：成功 {success}，失败 {fail}")
+        self._run_async("批量Fork", _work)
+
+    # ─────────────────── Release ───────────────────
+
+    def _do_release(self):
+        if not self._need_auth():
+            return
+        if self.platform != "GitHub":
+            messagebox.showinfo("提示", "Release功能目前仅支持GitHub平台")
+            return
+        parsed = self._parse_owner_repo(self.rl_repo)
+        if not parsed:
+            return
+        owner, repo = parsed
+        rp = f"{owner}/{repo}"
+        tag = self.rl_tag.get().strip()
+        if not tag:
+            messagebox.showerror("错误", "请输入Tag名称")
+            return
+        
+        rl_title = self.rl_title.get().strip() or tag
+        rl_body = self.rl_body.get("1.0", tk.END).strip()
+        rl_draft = self.rl_draft.get()
+        rl_pre = self.rl_pre.get()
+        assets = self.rl_assets_var.get().strip()
+
+        def _work():
+            self.log(f"验证仓库 {rp} 是否存在...")
+            repo_resp = self.api.get_repo(owner, repo)
+            if repo_resp.status_code == 404:
+                self.log(f"错误：仓库 {rp} 不存在或无访问权限")
+                return
+            elif repo_resp.status_code != 200:
+                self.log(f"验证仓库失败：{repo_resp.status_code}")
+                return
+
+            self.log(f"仓库验证通过，开始创建Release...")
+            resp = self.api.create_release(owner, repo, tag, rl_title, rl_body, rl_draft, rl_pre)
+            if resp.status_code == 201:
+                rd = resp.json()
+                self.log(f"Release 创建成功: {rd['html_url']}")
+                self.logger.add_history("创建Release", f"{rp} - {tag}", self.platform, rp)
+                if assets:
+                    upload_url = rd.get("upload_url", "")
+                    for fp in assets.split(";"):
+                        fp = fp.strip()
+                        if fp and os.path.isfile(fp):
+                            self.log(f"上传附件: {os.path.basename(fp)}...")
+                            ar = self.api.upload_release_asset(upload_url, fp)
+                            if ar and ar.status_code == 201:
+                                self.log(f"  附件上传成功")
+                            else:
+                                self.log(f"  附件上传失败: {ar.status_code if ar else '未知错误'}")
+            elif resp.status_code == 404:
+                self.log(f"创建失败：无法创建Release，请检查仓库是否存在")
+            elif resp.status_code == 422:
+                self.log(f"创建失败：数据验证错误 - {resp.json().get('message', '')}")
+            else:
+                self.log(f"创建失败: {resp.status_code}")
+        self._run_async("创建Release", _work, on_done=self._list_releases)
+
+    def _list_releases(self):
+        if not self._need_auth():
+            return
+        parsed = self._parse_owner_repo(self.rl_repo)
+        if not parsed:
+            return
+        owner, repo = parsed
+        
+        def _work():
+            try:
+                releases = self.api.list_releases(owner, repo)
+                rows = [(r.get("tag_name", ""), r.get("name", ""),
+                         "草稿" if r.get("draft") else ("预发布" if r.get("prerelease") else "正式"),
+                         (r.get("created_at") or "")[:10]) for r in releases]
+                self.root.after(0, lambda: self._populate_treeview(self.rl_tree, rows))
+                self.log(f"加载了 {len(releases)} 个 Release")
+            except Exception as e:
+                self.log(f"加载Release列表失败：{e}")
+        self._run_async("加载Release列表", _work)
+
+    # ─────────────────── 我的仓库 ───────────────────
+
+    def _repos_load(self):
+        if not self._need_auth():
+            return
+        
+        def _work():
+            try:
+                repos = self.api.list_repos()
+                rows = [(r["full_name"], "私有" if r["private"] else "公开",
+                         (r["license"].get("spdx_id", "") or r["license"].get("name", "") or "") if r.get("license") else "",
+                         r.get("language") or "", (r.get("updated_at") or "")[:10]) for r in repos]
+                self.root.after(0, lambda: self._populate_treeview(self.repo_tree, rows))
+                self.log(f"加载了 {len(repos)} 个仓库")
+            except Exception as e:
+                self.log(f"加载仓库列表失败：{e}")
+        self._run_async("加载我的仓库列表", _work)
+
+    def _repos_open(self):
+        sel = self.repo_tree.selection()
+        if not sel:
+            return
+        name = self.repo_tree.item(sel[0], "values")[0]
+        webbrowser.open(f"{PLATFORMS[self.platform]['web']}/{name}")
+
+    def _export_repos(self):
+        """导出仓库列表"""
+        if not self._need_auth():
+            return
+        
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("CSV", "*.csv")],
+            title="导出仓库列表"
+        )
+        if not file_path:
+            return
+        
+        def _work():
+            try:
+                repos = self.api.list_repos()
+                
+                if file_path.endswith(".csv"):
+                    with open(file_path, "w", encoding="utf-8-sig", newline="") as f:
+                        writer = csv.writer(f)
+                        writer.writerow(["仓库名称", "可见性", "开源协议", "语言", "Star", "Fork", "最后更新"])
+                        for r in repos:
+                            vis = "私有" if r["private"] else "公开"
+                            lang = r.get("language") or ""
+                            lic = ""
+                            if r.get("license"):
+                                lic = r["license"].get("spdx_id", "")
+                            stars = r.get("stargazers_count", 0)
+                            forks = r.get("forks_count", 0)
+                            updated = (r.get("updated_at", ""))[:10]
+                            writer.writerow([r["full_name"], vis, lic, lang, stars, forks, updated])
+                else:
+                    export_data = []
+                    for r in repos:
+                        export_data.append({
+                            "name": r.get("full_name", ""),
+                            "private": r.get("private", False),
+                            "language": r.get("language", ""),
+                            "stars": r.get("stargazers_count", 0),
+                            "forks": r.get("forks_count", 0),
+                            "url": r.get("html_url", ""),
+                            "updated": (r.get("updated_at", ""))[:10]
+                        })
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        json.dump(export_data, f, indent=2, ensure_ascii=False)
+                
+                self.log(f"仓库列表已导出到：{file_path}")
+                self.logger.add_history("导出仓库列表", f"{len(repos)}个仓库", self.platform)
+            except Exception as e:
+                self.log(f"导出失败：{e}")
+        self._run_async("导出仓库列表", _work)
+
+    # ─────────────────── 辅助 ───────────────────
+
+    def log(self, msg: str) -> None:
+        self._log_to_ui(f"[{datetime.now():%H:%M:%S}] {msg}")
+
+    def _refresh(self):
+        token = self.cfg.get(f"token_{self.platform}", self.cfg.get("token", ""))
+        if token:
+            self._set_token(token)
+
+    def run(self) -> None:
+        atexit.register(self._cleanup)
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    App().run()
+

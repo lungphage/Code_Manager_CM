@@ -1,0 +1,168 @@
+========================================
+Code Manager Changelog / 更新日志 / Журнал изменений
+========================================
+
+----------------------------------------
+v10.5.0 (2026-05-17)
+----------------------------------------
+[EN]
+[Bug Fixes]
+• Added missing `import base64`: encrypt_token() and decrypt_token() used base64.b64encode/
+  base64.b64decode but the module was never imported, causing NameError at runtime
+• Fixed upload_release_asset bypassing NetworkManager: was using bare requests.post() with no
+  retry, proxy, or timeout support; changed to self._net.request()
+• Fixed os.startfile being Windows-only: _open_log_dir now uses platform detection
+  (os.startfile on Windows, `open` on macOS, `xdg-open` on Linux)
+• Fixed _batch_upload hardcoded branch "main": now reads the branch value from the upload tab
+  settings, falling back to "main" if empty
+• Fixed _show_loading event loop re-entry: changed root.update() to root.update_idletasks()
+  to prevent recursive event handling
+
+[Refactoring]
+• Extracted _run_async(label, fn, on_done=None) helper: eliminates 36 copies of the
+  show_loading → threading.Thread → try/except/finally → hide_loading boilerplate,
+  reducing the codebase by ~260 lines
+• Extracted _parse_owner_repo(var) helper: eliminates 18 copies of the
+  validate_owner_repo → split("/", 1) pattern
+• Extracted _populate_treeview(tree, rows) helper: eliminates 8 copies of the
+  tree.get_children() → delete → insert loop
+
+[Code Cleanup]
+• Removed unused import io (never referenced in the file)
+• Removed unused import ThreadPoolExecutor (never referenced in the file)
+• Removed unused method GitOps.check_ssh() (defined but never called)
+• Removed unused method GitOps.get_submodules() (defined but never called)
+• Extracted 15 named constants replacing magic numbers: MAX_LOG_SIZE, MAX_LOG_FILES,
+  MAX_HISTORY, HTTP_TIMEOUT, HTTP_RETRIES, RETRY_AFTER_DEFAULT, REPOS_PER_PAGE,
+  SEARCH_PER_PAGE, ISSUES_PER_PAGE, WINDOW_SIZE, WINDOW_MIN_SIZE, SIDEBAR_WIDTH,
+  ICON_SUBSAMPLE, WEIXIN_SUBSAMPLE
+
+[Type Annotations]
+• Added type annotations to all public methods of PlatformAPI (30 methods)
+• Added type annotations to all public methods of GitOps (23 methods)
+• Added type annotations to key App methods (log, run, _log_to_ui)
+• Added `from __future__ import annotations` for forward reference support
+
+[ZH]
+【Bug 修复】
+• 添加缺失的 import base64：encrypt_token() 和 decrypt_token() 使用了 base64 但从未导入，
+  导致运行时 NameError 崩溃
+• 修复 upload_release_asset 绕过 NetworkManager：之前直接用 requests.post()，无重试/代理/
+  超时支持；改为 self._net.request()
+• 修复 os.startfile 仅限 Windows：_open_log_dir 现在使用平台检测（Windows 用 os.startfile，
+  macOS 用 open，Linux 用 xdg-open）
+• 修复 _batch_upload 硬编码分支 "main"：现在从上传标签页读取分支设置，为空时回退 "main"
+• 修复 _show_loading 事件循环重入：root.update() 改为 root.update_idletasks()，防止递归
+  事件处理
+
+【代码重构】
+• 提取 _run_async(label, fn, on_done=None) 辅助方法：消除 36 处 show_loading →
+  threading.Thread → try/except/finally → hide_loading 模板代码，减少约 260 行
+• 提取 _parse_owner_repo(var) 辅助方法：消除 18 处 validate_owner_repo → split("/", 1) 重复
+• 提取 _populate_treeview(tree, rows) 辅助方法：消除 8 处 tree.get_children() → delete →
+  insert 循环重复
+
+【代码清理】
+• 删除未使用的 import io（文件中从未引用）
+• 删除未使用的 import ThreadPoolExecutor（文件中从未引用）
+• 删除未使用的方法 GitOps.check_ssh()（定义但从未调用）
+• 删除未使用的方法 GitOps.get_submodules()（定义但从未调用）
+• 提取 15 个命名常量替换魔法数字：MAX_LOG_SIZE、MAX_LOG_FILES、MAX_HISTORY、HTTP_TIMEOUT、
+  HTTP_RETRIES、RETRY_AFTER_DEFAULT、REPOS_PER_PAGE、SEARCH_PER_PAGE、ISSUES_PER_PAGE、
+  WINDOW_SIZE、WINDOW_MIN_SIZE、SIDEBAR_WIDTH、ICON_SUBSAMPLE、WEIXIN_SUBSAMPLE
+
+【类型注解】
+• 为 PlatformAPI 所有公共方法添加类型注解（30 个方法）
+• 为 GitOps 所有公共方法添加类型注解（23 个方法）
+• 为 App 关键方法添加类型注解（log、run、_log_to_ui）
+• 添加 from __future__ import annotations 支持前向引用
+
+[RU]
+[Исправление ошибок]
+• Добавлен отсутствующий import base64: encrypt_token() и decrypt_token() использовали base64,
+  но модуль никогда не импортировался, вызывая NameError во время выполнения
+• Исправлен upload_release_asset, обходящий NetworkManager: использовался голый requests.post()
+  без повторов, прокси или тайм-аута; изменено на self._net.request()
+• Исправлен os.startfile, работающий только на Windows: _open_log_dir теперь использует
+  определение платформы (os.startfile на Windows, `open` на macOS, `xdg-open` на Linux)
+• Исправлено жёстко заданное значение ветки "main" в _batch_upload: теперь читается значение
+  ветки из вкладки загрузки, по умолчанию "main"
+• Исправлена повторная запись в цикл событий _show_loading: root.update() заменён на
+  root.update_idletasks() для предотвращения рекурсивной обработки событий
+
+[Рефакторинг]
+• Извлечён вспомогательный метод _run_async(label, fn, on_done=None): устраняет 36 копий
+  шаблона show_loading → threading.Thread → try/except/finally → hide_loading,
+  уменьшая код на ~260 строк
+• Извлечён вспомогательный метод _parse_owner_repo(var): устраняет 18 копий шаблона
+  validate_owner_repo → split("/", 1)
+• Извлечён вспомогательный метод _populate_treeview(tree, rows): устраняет 8 копий цикла
+  tree.get_children() → delete → insert
+
+[Очистка кода]
+• Удалён неиспользуемый import io (нигде не引用ается в файле)
+• Удалён неиспользуемый import ThreadPoolExecutor (нигде не引用ается в файле)
+• Удалён неиспользуемый метод GitOps.check_ssh() (определён, но никогда не вызывался)
+• Удалён неиспользуемый метод GitOps.get_submodules() (определён, но никогда не вызывался)
+• Извлечены 15 именованных констант вместо магических чисел: MAX_LOG_SIZE, MAX_LOG_FILES,
+  MAX_HISTORY, HTTP_TIMEOUT, HTTP_RETRIES, RETRY_AFTER_DEFAULT, REPOS_PER_PAGE,
+  SEARCH_PER_PAGE, ISSUES_PER_PAGE, WINDOW_SIZE, WINDOW_MIN_SIZE, SIDEBAR_WIDTH,
+  ICON_SUBSAMPLE, WEIXIN_SUBSAMPLE
+
+[Аннотации типов]
+• Добавлены аннотации типов ко всем публичным методам PlatformAPI (30 методов)
+• Добавлены аннотации типов ко всем публичным методам GitOps (23 метода)
+• Добавлены аннотации типов к ключевым методам App (log, run, _log_to_ui)
+• Добавлен from __future__ import annotations для поддержки прямых ссылок
+
+----------------------------------------
+v10.4.0 (2026-05-13)
+----------------------------------------
+[EN]
+[Performance Optimization]
+• GradientButton: Removed redundant first-pass gradient loop (original code drew two passes;
+  the first was completely overwritten by the second)
+• GradientButton: Added color cache (_cached_colors); reuses pre-computed gradient list when
+  colors are unchanged, significantly reducing string-parsing overhead on hover
+
+[Bug Fixes]
+• Fixed missing username attribute in PlatformAPI: falling back to self.api.username during
+  post-fork clone caused AttributeError; initialized properly and assigned in get_user()
+• Fixed NetworkManager returning None after consecutive rate-limiting: after 3×429 responses
+  the function implicitly returned None; changed to save the last response and return it,
+  preventing .status_code crash in callers
+• Fixed list_repos parsing JSON three times: each paginated call invoked r.json() three times;
+  changed to cache result in data
+• Fixed EXE startup crash: token migration write exceptions no longer block startup;
+  changed to silent try/except skip
+
+[Encapsulation Improvements]
+• GitOps: Added pull_unrelated(path, remote, branch): encapsulates --allow-unrelated-histories pull
+• GitOps: Added pull_with_strategy(path, remote, branch, strategy): encapsulates pull with merge strategy
+• Eliminated encapsulation leak of directly calling private git._run(["pull",...])
+  in _do_upload and _do_commit_push
+
+[Code Quality]
+• Merged App.log and _log_to_ui: thread-safe logic unified in _log_to_ui;
+  log() only formats and delegates
+• _get_theme adds _normalize_theme(): uniformly fills missing fallback keys for all themes
+  (sidebar_bg/card_bg/tooltip_bg etc.), eliminating scattered .get("key", default) calls
+• NetworkManager: merged Timeout + ConnectionError retry logic, eliminating duplicate code blocks
+• Removed duplicate import time inside _do_fork (already imported at top level)
+
+[Thread Safety]
+• _do_upload, _do_create_repo: moved desc/priv/lic/msg/gitignore reads to main thread
+• _do_commit: moved ud_msg read to main thread
+• _do_push: moved ud_force read to main thread
+• _do_commit_push: moved ud_msg/ud_force reads to main thread
+• _load_issues: moved is_state read to main thread
+• _load_pulls: moved pr_state read to main thread
+
+[Security]
+• Token encrypted local storage: machine-bound XOR+base64 encryption scheme (_get_machine_key);
+  tokens no longer stored as plaintext in config files; automatically decrypted on restart,
+  no need to re-enter
+• On exit, only clears memory (_cleanup no longer overwrites disk);
+  encrypted token auto-restores on next startup
+
+========================================
