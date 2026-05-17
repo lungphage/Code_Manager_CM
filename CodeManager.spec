@@ -1,8 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
+<<<<<<< HEAD
 # PyInstaller spec for CodeManager v10.5
 
 a = Analysis(
     ['github_manager_v10.5.py'],
+=======
+# PyInstaller spec for CodeManager v10.3
+
+a = Analysis(
+    ['github_manager_v10.3.py'],
+>>>>>>> 7b1e4500d60b72e59cf96e961166b4ae9e69fc16
     pathex=[],
     binaries=[],
     datas=[
@@ -31,7 +38,11 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
+<<<<<<< HEAD
     name='CodeManager_v10_5',
+=======
+    name='CodeManager_v10_3',
+>>>>>>> 7b1e4500d60b72e59cf96e961166b4ae9e69fc16
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

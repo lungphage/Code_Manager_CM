@@ -1,7 +1,11 @@
 @echo off
 chcp 65001 >nul
 echo ==========================================
+<<<<<<< HEAD
 echo   Code Manager v10.5 - PyInstaller 构建
+=======
+echo   Code Manager v10.3 - PyInstaller 构建
+>>>>>>> 7b1e4500d60b72e59cf96e961166b4ae9e69fc16
 echo   Author: LZF
 echo ==========================================
 echo.
@@ -34,6 +38,10 @@ if %errorlevel% neq 0 (
 echo.
 
 echo [4/4] 构建完成！
+<<<<<<< HEAD
 echo   EXE 位置：dist\CodeManager_v10_5.exe
+=======
+echo   EXE 位置：dist\CodeManager_v10_3.exe
+>>>>>>> 7b1e4500d60b72e59cf96e961166b4ae9e69fc16
 echo.
 pause
