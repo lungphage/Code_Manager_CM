@@ -173,3 +173,8 @@ v10.4/
 - **Python**：3.8+
 - **依赖**：requests
 - **打包**：Nuitka 4.x（主）/ PyInstaller 5.x（备）
+
+## Star History
+
+<!-- 将 SeaZhusp/LiteNote 替换为实际仓库 -->
+[![Star History Chart](https://api.star-history.com/svg?repos=lungphage/Code_Manager_CM&type=Date&legend=top-left)](https://star-history.com/#lungphage/Code_Manager_CM&Date)
